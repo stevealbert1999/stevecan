@@ -1,0 +1,4 @@
+# Copy to `.dev.vars` for local development with `wrangler dev`.
+# Never commit `.dev.vars`.
+OPENAI_API_KEY="sk-..."
+JARVIS_API_KEY="dev-local-token"
