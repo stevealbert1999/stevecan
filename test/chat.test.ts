@@ -2,6 +2,7 @@ import { env, fetchMock, SELF } from "cloudflare:test";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import schema1 from "../migrations/0001_init.sql?raw";
 import schema2 from "../migrations/0002_memory.sql?raw";
+import schema3 from "../migrations/0003_events_suggestions.sql?raw";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv {
@@ -12,6 +13,8 @@ declare module "cloudflare:test" {
     JARVIS_SYSTEM_PROMPT: string;
     JARVIS_VERSION: string;
     JARVIS_WEB_ORIGIN: string;
+    JARVIS_BUTLER_ENABLED: string;
+    JARVIS_BUTLER_MODEL: string;
   }
 }
 
@@ -30,6 +33,7 @@ async function applySchema(sql: string) {
 beforeAll(async () => {
   await applySchema(schema1);
   await applySchema(schema2);
+  await applySchema(schema3);
   fetchMock.activate();
   fetchMock.disableNetConnect();
 });
@@ -42,6 +46,8 @@ beforeEach(async () => {
   await env.DB.exec("DELETE FROM commitments");
   await env.DB.exec("DELETE FROM projects");
   await env.DB.exec("DELETE FROM episodes");
+  await env.DB.exec("DELETE FROM events");
+  await env.DB.exec("DELETE FROM suggestions");
 });
 
 afterEach(() => {
@@ -399,5 +405,63 @@ describe("CORS", () => {
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe("*");
     expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+  });
+});
+
+describe("events", () => {
+  it("emits chat events on /chat", async () => {
+    mockOpenAI("ok");
+    await SELF.fetch("http://localhost/chat", {
+      method: "POST",
+      headers: { ...AUTH, "content-type": "application/json" },
+      body: JSON.stringify({ message: "hola" }),
+    });
+    const r = await SELF.fetch("http://localhost/events?limit=10", { headers: AUTH });
+    expect(r.status).toBe(200);
+    const evts = (await r.json()) as Array<{ kind: string }>;
+    const kinds = evts.map((e) => e.kind);
+    expect(kinds).toContain("thread.created");
+    expect(kinds).toContain("chat.message.user");
+    expect(kinds).toContain("chat.message.assistant");
+  });
+
+  it("emits memory events on CRUD", async () => {
+    const created = await SELF.fetch("http://localhost/memory/facts", {
+      method: "POST",
+      headers: { ...AUTH, "content-type": "application/json" },
+      body: JSON.stringify({ content: "x" }),
+    });
+    const fact = (await created.json()) as { id: string };
+    await SELF.fetch(`http://localhost/memory/facts/${fact.id}`, {
+      method: "PATCH",
+      headers: { ...AUTH, "content-type": "application/json" },
+      body: JSON.stringify({ content: "y" }),
+    });
+    await SELF.fetch(`http://localhost/memory/facts/${fact.id}`, {
+      method: "DELETE",
+      headers: AUTH,
+    });
+
+    const r = await SELF.fetch("http://localhost/events?limit=10", { headers: AUTH });
+    const kinds = ((await r.json()) as Array<{ kind: string }>).map((e) => e.kind);
+    expect(kinds).toContain("memory.facts.created");
+    expect(kinds).toContain("memory.facts.updated");
+    expect(kinds).toContain("memory.facts.deleted");
+  });
+
+  it("filters by kind", async () => {
+    mockOpenAI("a");
+    await SELF.fetch("http://localhost/chat", {
+      method: "POST",
+      headers: { ...AUTH, "content-type": "application/json" },
+      body: JSON.stringify({ message: "hi" }),
+    });
+    const r = await SELF.fetch(
+      "http://localhost/events?kind=chat.message.user",
+      { headers: AUTH },
+    );
+    const list = (await r.json()) as Array<{ kind: string }>;
+    expect(list.length).toBeGreaterThanOrEqual(1);
+    expect(list.every((e) => e.kind === "chat.message.user")).toBe(true);
   });
 });

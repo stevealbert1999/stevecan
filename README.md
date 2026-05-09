@@ -25,10 +25,20 @@ Durable Objects per user, etc., come in later iterations.
 | POST | `/memory/:kind` | Bearer | item without `id` | created item |
 | PATCH | `/memory/:kind/:id` | Bearer | partial | updated item |
 | DELETE | `/memory/:kind/:id` | Bearer | — | `204` |
+| GET | `/events?kind=&since=&limit=` | Bearer | — | `Event[]` (most recent first) |
+| GET | `/suggestions?status=` | Bearer | — | `Suggestion[]` |
+| POST | `/suggestions` | Bearer | `{title, reason?, priority?, action_payload?, thread_id?}` | created suggestion |
+| PATCH | `/suggestions/:id` | Bearer | `{status?, priority?, title?, reason?}` | updated suggestion |
+| DELETE | `/suggestions/:id` | Bearer | — | `204` |
 
 `:kind` ∈ `facts | preferences | commitments | projects | episodes`. Bearer
 token = `JARVIS_API_KEY` (Worker secret). `/health` is public. Memory snapshot
 is auto-injected as the system prompt on every `/chat`.
+
+After every `/chat` response, if `JARVIS_BUTLER_ENABLED=true` (default), the
+**Butler** agent runs in `waitUntil` and asks the LLM whether the conversation
+implies any actionable suggestions (commitments, calls, reminders). Each is
+written to `suggestions` and surfaces in the HUD's Butler tab.
 
 ## Local development
 
@@ -62,7 +72,7 @@ Open the page, click *Ajustes*, paste `http://localhost:8787` and your bearer.
 ## Tests
 
 ```bash
-npm run typecheck && npm test          # worker — 17 tests
+npm run typecheck && npm test          # worker — 31 tests
 cd web && npm run typecheck            # web — type-only
 ```
 
@@ -118,22 +128,28 @@ src/                       Worker source
     cors.ts                CORS w/ JARVIS_WEB_ORIGIN allowlist
   routes/
     health.ts
-    chat.ts                streaming SSE + memory injection
-    threads.ts
-    memory.ts              CRUD over 5 kinds
+    chat.ts                streaming SSE + memory injection + butler trigger
+    threads.ts             emits thread.* events
+    memory.ts              CRUD over 5 kinds, emits memory.* events
+    events.ts              GET /events
+    suggestions.ts         CRUD /suggestions
   services/
     memory.ts              threads + messages
     memory_store.ts        5-kind memory CRUD + snapshot + context render
+    events.ts              EventBus.emit/list
+    suggestions.ts         SuggestionsStore + runButler
     openai.ts              chatCompletion + chatCompletionStream
   types.ts
 migrations/
   0001_init.sql            threads, messages
   0002_memory.sql          facts, preferences, commitments, projects, episodes
-test/chat.test.ts          17 tests
+  0003_events_suggestions.sql   events, suggestions
+test/{chat,butler}.test.ts 31 tests
 web/                       Vite vanilla TS HUD (Cloudflare Pages)
   index.html               chat page
   memory.html              memory editor
-  src/{main,memory,api,auth,types,styles}.{ts,css}
+  butler.html              suggestions inbox
+  src/{main,memory,butler,api,auth,badge,types,styles}.{ts,css}
 .github/workflows/deploy.yml
 ```
 

@@ -1,5 +1,6 @@
 import { ApiClient, type ThreadDetail, type ThreadMeta } from "./api";
 import { bindSettingsDialog, loadSettings } from "./auth";
+import { refreshButlerBadge, startBadgePolling } from "./badge";
 
 interface State {
   client: ApiClient | null;
@@ -131,6 +132,10 @@ async function send(text: string) {
   if (threadId) {
     await loadThread(threadId);
   }
+
+  // Butler runs server-side after the response; refresh the badge a few times.
+  setTimeout(() => refreshButlerBadge(), 1500);
+  setTimeout(() => refreshButlerBadge(), 5000);
 }
 
 function bindComposer() {
@@ -162,6 +167,7 @@ function init() {
 
   if (!ensureClient(openSettings)) return;
   refreshThreads();
+  startBadgePolling();
 }
 
 init();

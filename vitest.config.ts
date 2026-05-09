@@ -16,6 +16,8 @@ export default defineWorkersConfig({
             JARVIS_SYSTEM_PROMPT: "You are Jarvis (test).",
             JARVIS_VERSION: "test",
             JARVIS_WEB_ORIGIN: "*",
+            JARVIS_BUTLER_ENABLED: "false",
+            JARVIS_BUTLER_MODEL: "gpt-4o-mini",
           },
         },
         wrangler: {

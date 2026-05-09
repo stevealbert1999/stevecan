@@ -6,9 +6,12 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 JARVIS_SYSTEM_PROMPT = "You are Jarvis, a concise and capable personal AI assistant."
 JARVIS_MODEL = "gpt-4o-mini"
-JARVIS_VERSION = "0.2.0"
+JARVIS_VERSION = "0.3.0"
 # Comma-separated list of allowed origins for the web HUD. Use "*" for any (dev only).
 JARVIS_WEB_ORIGIN = "*"
+# Butler runs after each chat response to detect actionable suggestions.
+JARVIS_BUTLER_ENABLED = "true"
+JARVIS_BUTLER_MODEL = "gpt-4o-mini"
 
 # Replace `database_id` after running: wrangler d1 create jarvis
 [[d1_databases]]

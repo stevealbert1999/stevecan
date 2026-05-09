@@ -38,6 +38,28 @@ export interface ThreadDetail extends ThreadMeta {
   }>;
 }
 
+export type SuggestionStatus = "pending" | "accepted" | "dismissed";
+
+export interface Suggestion {
+  id: string;
+  title: string;
+  reason: string | null;
+  priority: number;
+  status: SuggestionStatus;
+  action_payload: string | null;
+  thread_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface JarvisEvent {
+  id: string;
+  kind: string;
+  source: string;
+  payload: string | null;
+  created_at: number;
+}
+
 export class ApiClient {
   constructor(private readonly settings: Settings) {}
 
@@ -109,6 +131,47 @@ export class ApiClient {
       headers: this.headers(),
     });
     if (!r.ok && r.status !== 204) throw new Error(`deleteMemory ${r.status}`);
+  }
+
+  async listSuggestions(status?: SuggestionStatus): Promise<Suggestion[]> {
+    const path = status ? `/suggestions?status=${status}` : "/suggestions";
+    const r = await fetch(this.url(path), { headers: this.headers() });
+    if (!r.ok) throw new Error(`listSuggestions ${r.status}`);
+    return (await r.json()) as Suggestion[];
+  }
+
+  async updateSuggestion(
+    id: string,
+    patch: Partial<Pick<Suggestion, "status" | "priority" | "title" | "reason">>,
+  ): Promise<Suggestion> {
+    const r = await fetch(this.url(`/suggestions/${id}`), {
+      method: "PATCH",
+      headers: this.headers(),
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) throw new Error(`updateSuggestion ${r.status}`);
+    return (await r.json()) as Suggestion;
+  }
+
+  async deleteSuggestion(id: string): Promise<void> {
+    const r = await fetch(this.url(`/suggestions/${id}`), {
+      method: "DELETE",
+      headers: this.headers(),
+    });
+    if (!r.ok && r.status !== 204) throw new Error(`deleteSuggestion ${r.status}`);
+  }
+
+  async listEvents(opts: { kind?: string; since?: number; limit?: number } = {}): Promise<JarvisEvent[]> {
+    const params = new URLSearchParams();
+    if (opts.kind) params.set("kind", opts.kind);
+    if (opts.since !== undefined) params.set("since", String(opts.since));
+    if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const r = await fetch(this.url(`/events${qs ? `?${qs}` : ""}`), {
+      headers: this.headers(),
+    });
+    if (!r.ok) throw new Error(`listEvents ${r.status}`);
+    return (await r.json()) as JarvisEvent[];
   }
 
   async chatStream(

@@ -5,6 +5,7 @@ import {
   type MemorySnapshot,
 } from "./api";
 import { bindSettingsDialog, loadSettings } from "./auth";
+import { startBadgePolling } from "./badge";
 
 const $ = <T extends Element>(s: string) => document.querySelector<T>(s)!;
 const $$ = <T extends Element>(s: string) => Array.from(document.querySelectorAll<T>(s));
@@ -196,6 +197,7 @@ function init() {
   }
   client = new ApiClient(s);
   refresh().catch((err) => console.error(err));
+  startBadgePolling();
 }
 
 init();

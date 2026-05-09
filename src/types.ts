@@ -77,3 +77,25 @@ export interface MemorySnapshot {
   projects: Project[];
   episodes: Episode[];
 }
+
+export interface JarvisEvent {
+  id: string;
+  kind: string;
+  source: string;
+  payload: string | null;
+  created_at: number;
+}
+
+export type SuggestionStatus = "pending" | "accepted" | "dismissed";
+
+export interface Suggestion {
+  id: string;
+  title: string;
+  reason: string | null;
+  priority: number;
+  status: SuggestionStatus;
+  action_payload: string | null;
+  thread_id: string | null;
+  created_at: number;
+  updated_at: number;
+}

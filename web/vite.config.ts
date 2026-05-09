@@ -8,6 +8,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, "index.html"),
         memory: resolve(__dirname, "memory.html"),
+        butler: resolve(__dirname, "butler.html"),
       },
     },
   },

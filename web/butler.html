@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Jarvis</title>
+    <title>Jarvis · Butler</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -11,27 +11,30 @@
       <aside class="sidebar">
         <div class="sidebar-head">
           <h1>Jarvis</h1>
-          <button id="new-thread" type="button">+ Nuevo</button>
         </div>
         <nav>
-          <a href="/" class="nav-item active">Chat</a>
+          <a href="/" class="nav-item">Chat</a>
           <a href="/memory.html" class="nav-item">Memoria</a>
-          <a href="/butler.html" class="nav-item">Butler <span class="badge" id="butler-badge"></span></a>
+          <a href="/butler.html" class="nav-item active">Butler <span class="badge" id="butler-badge"></span></a>
           <button id="settings-btn" type="button" class="nav-item ghost">Ajustes</button>
         </nav>
-        <ul id="thread-list" class="thread-list"></ul>
       </aside>
-      <main class="main">
-        <div id="messages" class="messages"></div>
-        <form id="composer" class="composer">
-          <textarea
-            id="input"
-            placeholder="Habla con Jarvis…"
-            rows="2"
-            required
-          ></textarea>
-          <button type="submit" id="send">Enviar</button>
-        </form>
+      <main class="main butler-main">
+        <header class="butler-head">
+          <h2>Butler</h2>
+          <p class="hint">Jarvis detecta acciones implícitas tras cada conversación. Acepta lo que tenga sentido, descarta lo que no.</p>
+        </header>
+        <section>
+          <h3>Pendientes</h3>
+          <ul id="pending" class="suggestions"></ul>
+        </section>
+        <details>
+          <summary>Historial</summary>
+          <h3>Aceptadas</h3>
+          <ul id="accepted" class="suggestions"></ul>
+          <h3>Descartadas</h3>
+          <ul id="dismissed" class="suggestions"></ul>
+        </details>
       </main>
     </div>
     <dialog id="settings-dialog">
@@ -51,6 +54,6 @@
         </menu>
       </form>
     </dialog>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/butler.ts"></script>
   </body>
 </html>

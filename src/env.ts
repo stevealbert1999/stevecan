@@ -6,4 +6,6 @@ export interface Env {
   JARVIS_MODEL: string;
   JARVIS_VERSION: string;
   JARVIS_WEB_ORIGIN?: string;
+  JARVIS_BUTLER_ENABLED?: string;
+  JARVIS_BUTLER_MODEL?: string;
 }
