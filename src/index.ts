@@ -1,11 +1,15 @@
 import { Hono } from "hono";
 import type { Env } from "./env";
 import { bearerAuth } from "./middleware/auth";
+import { cors } from "./middleware/cors";
 import { chat } from "./routes/chat";
 import { health } from "./routes/health";
+import { memory } from "./routes/memory";
 import { threads } from "./routes/threads";
 
 const app = new Hono<{ Bindings: Env }>();
+
+app.use("*", cors);
 
 app.route("/", health);
 
@@ -13,6 +17,7 @@ const protectedApp = new Hono<{ Bindings: Env }>();
 protectedApp.use("*", bearerAuth);
 protectedApp.route("/", chat);
 protectedApp.route("/", threads);
+protectedApp.route("/", memory);
 
 app.route("/", protectedApp);
 

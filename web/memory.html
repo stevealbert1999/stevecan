@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis · Memoria</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <h1>Jarvis</h1>
+        </div>
+        <nav>
+          <a href="/" class="nav-item">Chat</a>
+          <a href="/memory.html" class="nav-item active">Memoria</a>
+          <button id="settings-btn" type="button" class="nav-item ghost">Ajustes</button>
+        </nav>
+      </aside>
+      <main class="main memory-main">
+        <h2>Memoria</h2>
+        <p class="hint">Visible y editable. El LLM la verá en cada conversación.</p>
+        <section data-kind="facts">
+          <header><h3>Hechos</h3></header>
+          <ul class="items"></ul>
+          <form class="add-form">
+            <input name="content" placeholder="Nuevo hecho…" required />
+            <button type="submit">Añadir</button>
+          </form>
+        </section>
+        <section data-kind="preferences">
+          <header><h3>Preferencias</h3></header>
+          <ul class="items"></ul>
+          <form class="add-form">
+            <input name="category" placeholder="Categoría (opcional)" />
+            <input name="content" placeholder="Preferencia…" required />
+            <button type="submit">Añadir</button>
+          </form>
+        </section>
+        <section data-kind="commitments">
+          <header><h3>Compromisos</h3></header>
+          <ul class="items"></ul>
+          <form class="add-form">
+            <input name="content" placeholder="Compromiso…" required />
+            <input name="due_at" type="date" />
+            <button type="submit">Añadir</button>
+          </form>
+        </section>
+        <section data-kind="projects">
+          <header><h3>Proyectos</h3></header>
+          <ul class="items"></ul>
+          <form class="add-form">
+            <input name="name" placeholder="Nombre del proyecto" required />
+            <input name="description" placeholder="Descripción (opcional)" />
+            <button type="submit">Añadir</button>
+          </form>
+        </section>
+        <section data-kind="episodes">
+          <header><h3>Episodios</h3></header>
+          <ul class="items"></ul>
+          <form class="add-form">
+            <input name="title" placeholder="Título (opcional)" />
+            <input name="summary" placeholder="Resumen…" required />
+            <input name="occurred_at" type="date" />
+            <button type="submit">Añadir</button>
+          </form>
+        </section>
+      </main>
+    </div>
+    <dialog id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <h2>Ajustes</h2>
+        <label>
+          API URL
+          <input type="url" id="api-url" placeholder="https://jarvis.tu-cuenta.workers.dev" required />
+        </label>
+        <label>
+          Bearer token
+          <input type="password" id="api-key" required />
+        </label>
+        <menu>
+          <button value="cancel">Cancelar</button>
+          <button id="settings-save" value="save">Guardar</button>
+        </menu>
+      </form>
+    </dialog>
+    <script type="module" src="/src/memory.ts"></script>
+  </body>
+</html>

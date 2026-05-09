@@ -1,113 +1,151 @@
-# Jarvis OS Cloud — MVP
+# Jarvis OS Cloud — Personal v1
 
-Serverless Jarvis backend on Cloudflare Workers. This is the **MVP**: a `/chat`
-endpoint that talks to OpenAI and persists threads in D1. Web HUD, voice
-realtime, mobile, agents and the rest of the architecture are future iterations.
+Serverless Jarvis on Cloudflare. Two pieces:
+
+- **Worker** (root): API on Cloudflare Workers + D1, with `/chat`, `/threads`,
+  `/memory` and SSE streaming.
+- **Web HUD** (`web/`): vanilla TS + Vite, deployed to Cloudflare Pages.
+
+This is the **Personal v1** iteration: usable daily by you, with structured
+memory (5 categories: facts, preferences, commitments, projects, episodes),
+streaming chat, and an editable memory page. Voice realtime, mobile, agents,
+Durable Objects per user, etc., come in later iterations.
 
 ## Endpoints
 
 | Method | Path | Auth | Body | Returns |
 | --- | --- | --- | --- | --- |
 | GET | `/health` | — | — | `{ok, version}` |
-| POST | `/chat` | Bearer | `{thread_id?, message}` | `{thread_id, reply}` |
-| GET | `/threads` | Bearer | — | `[{id,title,updated_at,...}]` |
+| POST | `/chat` | Bearer | `{thread_id?, message}` | `{thread_id, reply}` (or SSE if `Accept: text/event-stream`) |
+| GET | `/threads` | Bearer | — | `[{id,title,...}]` |
 | GET | `/threads/:id` | Bearer | — | `{id, messages:[…], ...}` |
 | DELETE | `/threads/:id` | Bearer | — | `204` |
+| GET | `/memory` | Bearer | — | `{facts, preferences, commitments, projects, episodes}` |
+| GET | `/memory/:kind` | Bearer | — | array |
+| POST | `/memory/:kind` | Bearer | item without `id` | created item |
+| PATCH | `/memory/:kind/:id` | Bearer | partial | updated item |
+| DELETE | `/memory/:kind/:id` | Bearer | — | `204` |
 
-Bearer token = `JARVIS_API_KEY` (set as Worker secret). `/health` is public.
+`:kind` ∈ `facts | preferences | commitments | projects | episodes`. Bearer
+token = `JARVIS_API_KEY` (Worker secret). `/health` is public. Memory snapshot
+is auto-injected as the system prompt on every `/chat`.
 
 ## Local development
 
+### Worker
+
 ```bash
 npm install
-
-# secrets for `wrangler dev`
-cp .dev.vars.example .dev.vars
-# edit .dev.vars and set OPENAI_API_KEY + JARVIS_API_KEY
-
-# create local D1 + apply migrations
+cp .dev.vars.example .dev.vars   # set OPENAI_API_KEY + JARVIS_API_KEY
 npm run db:migrate:local
-
-# run worker locally
-npm run dev
+npm run dev   # http://localhost:8787
 
 # in another shell
 curl http://localhost:8787/health
-curl -X POST http://localhost:8787/chat \
+curl -N -X POST http://localhost:8787/chat \
   -H "Authorization: Bearer dev-local-token" \
+  -H "Accept: text/event-stream" \
   -H "content-type: application/json" \
-  -d '{"message":"hola Jarvis"}'
+  -d '{"message":"hola"}'
 ```
+
+### Web HUD
+
+```bash
+cd web
+npm install
+npm run dev   # http://localhost:5173
+```
+
+Open the page, click *Ajustes*, paste `http://localhost:8787` and your bearer.
 
 ## Tests
 
 ```bash
-npm run typecheck
-npm test
+npm run typecheck && npm test          # worker — 17 tests
+cd web && npm run typecheck            # web — type-only
 ```
 
-Tests use `@cloudflare/vitest-pool-workers` with miniflare. OpenAI is mocked via
-`fetchMock` from `cloudflare:test`, so no real API key is needed.
-
-## First-time setup (production)
+## First-time production setup
 
 You need a Cloudflare account and an OpenAI account.
 
 ```bash
-# 1. login
 npx wrangler login
 
-# 2. create D1 database
 npx wrangler d1 create jarvis
-# copy the database_id from the output into wrangler.toml
+# copy database_id into wrangler.toml
 
-# 3. apply migrations to remote D1
 npm run db:migrate:remote
-
-# 4. set secrets
 npx wrangler secret put OPENAI_API_KEY
 npx wrangler secret put JARVIS_API_KEY
-
-# 5. first deploy
 npx wrangler deploy
+
+# Pages project (web HUD)
+cd web
+npx wrangler pages project create jarvis-hud
+npm run build
+npx wrangler pages deploy dist --project-name=jarvis-hud --branch=main
 ```
 
-After this, every push to `main` will redeploy via GitHub Actions (see below).
+After the first Pages deploy, update `wrangler.toml` so `JARVIS_WEB_ORIGIN`
+points at the Pages URL (instead of `*`) for tighter CORS.
 
-## GitHub Actions
+## CI/CD
 
-`.github/workflows/deploy.yml` runs on push to `main`:
-1. install + typecheck + test
-2. apply D1 migrations (remote)
-3. `wrangler deploy`
+`.github/workflows/deploy.yml` runs two jobs in parallel on push to `main`:
+
+- **worker** — install + typecheck + test + apply D1 migrations + deploy
+  Worker.
+- **web** — install + typecheck + build + deploy Pages.
 
 Required repo secrets:
-- `CLOUDFLARE_API_TOKEN` — token with `Workers Scripts:Edit` and `D1:Edit`
-- `CLOUDFLARE_ACCOUNT_ID` — Cloudflare account id
+- `CLOUDFLARE_API_TOKEN` — token with `Workers Scripts:Edit`, `D1:Edit`,
+  `Cloudflare Pages:Edit`.
+- `CLOUDFLARE_ACCOUNT_ID`.
 
-`OPENAI_API_KEY` and `JARVIS_API_KEY` live as **Worker** secrets (`wrangler
-secret put`), not GitHub secrets.
+`OPENAI_API_KEY` and `JARVIS_API_KEY` live as **Worker** secrets, not GitHub
+secrets.
 
 ## Layout
 
 ```
-src/
-  index.ts           Hono app wiring
-  env.ts             Env type (D1 + secrets + vars)
-  middleware/auth.ts Bearer auth
-  routes/            health, chat, threads
-  services/          memory (D1), openai (chat completions)
-  types.ts           Thread, Message
-migrations/0001_init.sql
-test/chat.test.ts
+src/                       Worker source
+  index.ts                 Hono app wiring (cors → health → auth → routes)
+  env.ts                   Env type
+  middleware/
+    auth.ts                Bearer
+    cors.ts                CORS w/ JARVIS_WEB_ORIGIN allowlist
+  routes/
+    health.ts
+    chat.ts                streaming SSE + memory injection
+    threads.ts
+    memory.ts              CRUD over 5 kinds
+  services/
+    memory.ts              threads + messages
+    memory_store.ts        5-kind memory CRUD + snapshot + context render
+    openai.ts              chatCompletion + chatCompletionStream
+  types.ts
+migrations/
+  0001_init.sql            threads, messages
+  0002_memory.sql          facts, preferences, commitments, projects, episodes
+test/chat.test.ts          17 tests
+web/                       Vite vanilla TS HUD (Cloudflare Pages)
+  index.html               chat page
+  memory.html              memory editor
+  src/{main,memory,api,auth,types,styles}.{ts,css}
 .github/workflows/deploy.yml
 ```
 
-## Roadmap (next iterations, not in MVP)
+## Roadmap (next iterations)
 
-- Web HUD (Cloudflare Pages → fetches this Worker).
-- SSE streaming on `/chat`.
-- Embeddings + Vectorize for memory graph.
-- Voice realtime via WebRTC + Durable Objects.
-- OAuth (Apple / Google) instead of static bearer.
-- Capability marketplace (LLM-callable tools).
+- Durable Object per user for hot state + WebSockets.
+- OpenAI Realtime + 3D orb (voice).
+- Embeddings + Vectorize for memory search.
+- Function calling so the LLM can write to memory itself.
+- Apple mode (CloudKit + iCloud Drive sync).
+- Mobile app, Mac Agent.
+- Home Assistant + n8n integrations.
+- Specialized agents (Butler / Planner / Coder / Home / Research / Ops / Finance).
+- Capability marketplace (manifest + permissions + tests + rollback).
+- Real auth (OAuth) instead of static bearer.

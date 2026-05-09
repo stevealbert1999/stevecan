@@ -5,4 +5,5 @@ export interface Env {
   JARVIS_SYSTEM_PROMPT: string;
   JARVIS_MODEL: string;
   JARVIS_VERSION: string;
+  JARVIS_WEB_ORIGIN?: string;
 }

@@ -15,6 +15,7 @@ export default defineWorkersConfig({
             JARVIS_MODEL: "gpt-4o-mini",
             JARVIS_SYSTEM_PROMPT: "You are Jarvis (test).",
             JARVIS_VERSION: "test",
+            JARVIS_WEB_ORIGIN: "*",
           },
         },
         wrangler: {

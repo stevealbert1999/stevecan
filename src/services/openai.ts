@@ -41,3 +41,58 @@ export async function chatCompletion(opts: ChatCompletionOpts): Promise<string> 
   }
   return reply;
 }
+
+export async function* chatCompletionStream(
+  opts: ChatCompletionOpts,
+): AsyncGenerator<string, void, unknown> {
+  const f = opts.fetcher ?? fetch;
+  const res = await f("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${opts.apiKey}`,
+      accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      model: opts.model,
+      messages: opts.messages,
+      stream: true,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`openai ${res.status}: ${text.slice(0, 500)}`);
+  }
+  if (!res.body) {
+    throw new Error("openai: empty stream body");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let nlIndex: number;
+    while ((nlIndex = buffer.indexOf("\n")) !== -1) {
+      const rawLine = buffer.slice(0, nlIndex).trim();
+      buffer = buffer.slice(nlIndex + 1);
+      if (!rawLine.startsWith("data:")) continue;
+      const payload = rawLine.slice(5).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const obj = JSON.parse(payload) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+        };
+        const delta = obj.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta.length > 0) yield delta;
+      } catch {
+        // ignore malformed chunks (keepalives, etc.)
+      }
+    }
+  }
+}

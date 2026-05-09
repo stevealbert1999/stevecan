@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <h1>Jarvis</h1>
+          <button id="new-thread" type="button">+ Nuevo</button>
+        </div>
+        <nav>
+          <a href="/" class="nav-item active">Chat</a>
+          <a href="/memory.html" class="nav-item">Memoria</a>
+          <button id="settings-btn" type="button" class="nav-item ghost">Ajustes</button>
+        </nav>
+        <ul id="thread-list" class="thread-list"></ul>
+      </aside>
+      <main class="main">
+        <div id="messages" class="messages"></div>
+        <form id="composer" class="composer">
+          <textarea
+            id="input"
+            placeholder="Habla con Jarvis…"
+            rows="2"
+            required
+          ></textarea>
+          <button type="submit" id="send">Enviar</button>
+        </form>
+      </main>
+    </div>
+    <dialog id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <h2>Ajustes</h2>
+        <label>
+          API URL
+          <input type="url" id="api-url" placeholder="https://jarvis.tu-cuenta.workers.dev" required />
+        </label>
+        <label>
+          Bearer token
+          <input type="password" id="api-key" required />
+        </label>
+        <menu>
+          <button value="cancel">Cancelar</button>
+          <button id="settings-save" value="save">Guardar</button>
+        </menu>
+      </form>
+    </dialog>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
