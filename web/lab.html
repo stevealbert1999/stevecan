@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis · Lab</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <h1>Jarvis</h1>
+        </div>
+        <nav>
+          <a href="/" class="nav-item">Chat</a>
+          <a href="/memory.html" class="nav-item">Memoria</a>
+          <a href="/butler.html" class="nav-item">Butler <span class="badge" id="butler-badge"></span></a>
+          <a href="/lab.html" class="nav-item active">Lab</a>
+          <button id="settings-btn" type="button" class="nav-item ghost">Ajustes</button>
+        </nav>
+      </aside>
+      <main class="main lab-main">
+        <header class="butler-head">
+          <h2>Lab</h2>
+          <p class="hint">Estado del sistema en vivo y pista de eventos. Para diagnóstico.</p>
+        </header>
+
+        <section class="lab-grid">
+          <div class="lab-card">
+            <h3>Estado <span id="ws-state" class="ws-pill">conectando…</span></h3>
+            <pre id="state-json">cargando…</pre>
+            <button id="refresh-state" type="button">Refrescar</button>
+          </div>
+          <div class="lab-card">
+            <h3>Endpoint runner</h3>
+            <form id="runner">
+              <div class="runner-row">
+                <select id="runner-method">
+                  <option>GET</option>
+                  <option>POST</option>
+                  <option>PATCH</option>
+                  <option>DELETE</option>
+                </select>
+                <input id="runner-path" placeholder="/state" required />
+              </div>
+              <textarea id="runner-body" placeholder='{"...": "..."}' rows="4"></textarea>
+              <button type="submit">Ejecutar</button>
+            </form>
+            <pre id="runner-output">—</pre>
+          </div>
+        </section>
+
+        <section>
+          <h3>Eventos en vivo</h3>
+          <ul id="event-stream" class="event-stream"></ul>
+        </section>
+      </main>
+    </div>
+    <dialog id="settings-dialog">
+      <form method="dialog" id="settings-form">
+        <h2>Ajustes</h2>
+        <label>API URL <input type="url" id="api-url" required /></label>
+        <label>Bearer token <input type="password" id="api-key" required /></label>
+        <menu>
+          <button value="cancel">Cancelar</button>
+          <button id="settings-save" value="save">Guardar</button>
+        </menu>
+      </form>
+    </dialog>
+    <script type="module" src="/src/lab.ts"></script>
+  </body>
+</html>

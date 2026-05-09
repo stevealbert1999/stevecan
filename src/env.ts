@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  HUD_HUB: DurableObjectNamespace;
   OPENAI_API_KEY: string;
   JARVIS_API_KEY: string;
   JARVIS_SYSTEM_PROMPT: string;

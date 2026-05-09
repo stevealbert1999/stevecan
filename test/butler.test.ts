@@ -69,7 +69,7 @@ function mockButlerJson(payload: unknown) {
 
 describe("SuggestionsStore", () => {
   it("creates with clamped priority and emits suggestion.created", async () => {
-    const bus = new EventBus(env.DB);
+    const bus = new EventBus(env.DB, env.HUD_HUB);
     const store = new SuggestionsStore(env.DB, bus);
     const sug = await store.create({ title: "Test", priority: 99, reason: "r" });
     expect(sug.priority).toBe(5);
@@ -80,7 +80,7 @@ describe("SuggestionsStore", () => {
   });
 
   it("updates status and emits event", async () => {
-    const bus = new EventBus(env.DB);
+    const bus = new EventBus(env.DB, env.HUD_HUB);
     const store = new SuggestionsStore(env.DB, bus);
     const sug = await store.create({ title: "x" });
     const updated = await store.update(sug.id, { status: "accepted" });
@@ -90,7 +90,7 @@ describe("SuggestionsStore", () => {
   });
 
   it("rejects invalid status", async () => {
-    const bus = new EventBus(env.DB);
+    const bus = new EventBus(env.DB, env.HUD_HUB);
     const store = new SuggestionsStore(env.DB, bus);
     const sug = await store.create({ title: "x" });
     await expect(
@@ -102,7 +102,7 @@ describe("SuggestionsStore", () => {
 
 describe("runButler", () => {
   it("creates suggestions from a JSON object response", async () => {
-    const bus = new EventBus(env.DB);
+    const bus = new EventBus(env.DB, env.HUD_HUB);
     const store = new SuggestionsStore(env.DB, bus);
 
     const fakeFetch: typeof fetch = async () =>
@@ -156,7 +156,7 @@ describe("runButler", () => {
   });
 
   it("returns 0 on malformed JSON without throwing", async () => {
-    const bus = new EventBus(env.DB);
+    const bus = new EventBus(env.DB, env.HUD_HUB);
     const store = new SuggestionsStore(env.DB, bus);
     const fakeFetch: typeof fetch = async () =>
       new Response(
@@ -176,7 +176,7 @@ describe("runButler", () => {
   });
 
   it("ignores entries without a title", async () => {
-    const bus = new EventBus(env.DB);
+    const bus = new EventBus(env.DB, env.HUD_HUB);
     const store = new SuggestionsStore(env.DB, bus);
     const fakeFetch: typeof fetch = async () =>
       new Response(

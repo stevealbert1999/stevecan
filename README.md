@@ -30,6 +30,8 @@ Durable Objects per user, etc., come in later iterations.
 | POST | `/suggestions` | Bearer | `{title, reason?, priority?, action_payload?, thread_id?}` | created suggestion |
 | PATCH | `/suggestions/:id` | Bearer | `{status?, priority?, title?, reason?}` | updated suggestion |
 | DELETE | `/suggestions/:id` | Bearer | — | `204` |
+| GET | `/state` | Bearer | — | `{version, butler_enabled, memory, threads_count, pending_suggestions, recent_events, server_time}` |
+| GET | `/ws` | Bearer (header **or** `?token=`) | upgrade required | live event stream over WebSocket |
 
 `:kind` ∈ `facts | preferences | commitments | projects | episodes`. Bearer
 token = `JARVIS_API_KEY` (Worker secret). `/health` is public. Memory snapshot
@@ -39,6 +41,11 @@ After every `/chat` response, if `JARVIS_BUTLER_ENABLED=true` (default), the
 **Butler** agent runs in `waitUntil` and asks the LLM whether the conversation
 implies any actionable suggestions (commitments, calls, reminders). Each is
 written to `suggestions` and surfaces in the HUD's Butler tab.
+
+The `EventBus` writes to D1 **and** broadcasts each event to the `HudHub`
+Durable Object, which fans out to connected WebSocket clients. The HUD's
+Butler badge and Lab page subscribe to `/ws` so suggestions and memory
+changes appear without polling.
 
 ## Local development
 
@@ -72,7 +79,7 @@ Open the page, click *Ajustes*, paste `http://localhost:8787` and your bearer.
 ## Tests
 
 ```bash
-npm run typecheck && npm test          # worker — 31 tests
+npm run typecheck && npm test          # worker — 37 tests
 cd web && npm run typecheck            # web — type-only
 ```
 
@@ -124,7 +131,7 @@ src/                       Worker source
   index.ts                 Hono app wiring (cors → health → auth → routes)
   env.ts                   Env type
   middleware/
-    auth.ts                Bearer
+    auth.ts                Bearer (header or ?token= for /ws)
     cors.ts                CORS w/ JARVIS_WEB_ORIGIN allowlist
   routes/
     health.ts
@@ -133,23 +140,28 @@ src/                       Worker source
     memory.ts              CRUD over 5 kinds, emits memory.* events
     events.ts              GET /events
     suggestions.ts         CRUD /suggestions
+    state.ts               GET /state full system snapshot
+    ws.ts                  GET /ws → forward to HudHub DO
   services/
     memory.ts              threads + messages
     memory_store.ts        5-kind memory CRUD + snapshot + context render
-    events.ts              EventBus.emit/list
+    events.ts              EventBus.emit/list (writes D1 + broadcasts to DO)
     suggestions.ts         SuggestionsStore + runButler
     openai.ts              chatCompletion + chatCompletionStream
+  durable_objects/
+    hud_hub.ts             WebSocket fan-out + recent ring buffer
   types.ts
 migrations/
   0001_init.sql            threads, messages
   0002_memory.sql          facts, preferences, commitments, projects, episodes
   0003_events_suggestions.sql   events, suggestions
-test/{chat,butler}.test.ts 31 tests
+test/{chat,butler,realtime}.test.ts   37 tests
 web/                       Vite vanilla TS HUD (Cloudflare Pages)
   index.html               chat page
   memory.html              memory editor
   butler.html              suggestions inbox
-  src/{main,memory,butler,api,auth,badge,types,styles}.{ts,css}
+  lab.html                 live event stream + endpoint runner
+  src/{main,memory,butler,lab,api,auth,badge,live,types,styles}.{ts,css}
 .github/workflows/deploy.yml
 ```
 

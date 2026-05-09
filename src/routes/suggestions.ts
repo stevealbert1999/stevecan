@@ -7,7 +7,7 @@ import type { SuggestionStatus } from "../types";
 export const suggestions = new Hono<{ Bindings: Env }>();
 
 suggestions.get("/suggestions", async (c) => {
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const store = new SuggestionsStore(c.env.DB, bus);
   const status = c.req.query("status");
   if (status && !["pending", "accepted", "dismissed"].includes(status)) {
@@ -27,7 +27,7 @@ suggestions.post("/suggestions", async (c) => {
   const title = typeof body.title === "string" ? body.title.trim() : "";
   if (!title) return c.json({ error: "title is required" }, 400);
 
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const store = new SuggestionsStore(c.env.DB, bus);
   const sug = await store.create({
     title,
@@ -47,7 +47,7 @@ suggestions.patch("/suggestions/:id", async (c) => {
   } catch {
     return c.json({ error: "invalid json" }, 400);
   }
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const store = new SuggestionsStore(c.env.DB, bus);
   try {
     const sug = await store.update(id, {
@@ -68,7 +68,7 @@ suggestions.patch("/suggestions/:id", async (c) => {
 
 suggestions.delete("/suggestions/:id", async (c) => {
   const id = c.req.param("id");
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const store = new SuggestionsStore(c.env.DB, bus);
   const ok = await store.delete(id);
   if (!ok) return c.json({ error: "not found" }, 404);

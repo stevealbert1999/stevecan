@@ -33,7 +33,9 @@ export const cors: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
 
   await next();
 
-  if (allowOrigin) {
+  // 101 Switching Protocols (WebSocket upgrade) responses have immutable
+  // headers and don't need CORS headers anyway.
+  if (allowOrigin && c.res.status !== 101) {
     c.res.headers.set("access-control-allow-origin", allowOrigin);
     c.res.headers.append("vary", "Origin");
   }

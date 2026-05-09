@@ -6,8 +6,12 @@ import { chat } from "./routes/chat";
 import { events } from "./routes/events";
 import { health } from "./routes/health";
 import { memory } from "./routes/memory";
+import { state } from "./routes/state";
 import { suggestions } from "./routes/suggestions";
 import { threads } from "./routes/threads";
+import { ws } from "./routes/ws";
+
+export { HudHub } from "./durable_objects/hud_hub";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -22,6 +26,8 @@ protectedApp.route("/", threads);
 protectedApp.route("/", memory);
 protectedApp.route("/", events);
 protectedApp.route("/", suggestions);
+protectedApp.route("/", state);
+protectedApp.route("/", ws);
 
 app.route("/", protectedApp);
 

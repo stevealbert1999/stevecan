@@ -1,7 +1,10 @@
 import type { JarvisEvent } from "../types";
 
 export class EventBus {
-  constructor(private readonly db: D1Database) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly hub?: DurableObjectNamespace,
+  ) {}
 
   async emit(
     kind: string,
@@ -21,6 +24,24 @@ export class EventBus {
       )
       .bind(event.id, event.kind, event.source, event.payload, event.created_at)
       .run();
+    if (this.hub) {
+      try {
+        const stub = this.hub.get(this.hub.idFromName("default"));
+        await stub.fetch("https://hub/broadcast", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            id: event.id,
+            kind: event.kind,
+            source: event.source,
+            payload: payload ?? null,
+            created_at: event.created_at,
+          }),
+        });
+      } catch (err) {
+        console.error("hub broadcast failed", err);
+      }
+    }
     return event;
   }
 

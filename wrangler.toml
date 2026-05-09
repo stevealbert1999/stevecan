@@ -13,6 +13,14 @@ JARVIS_WEB_ORIGIN = "*"
 JARVIS_BUTLER_ENABLED = "true"
 JARVIS_BUTLER_MODEL = "gpt-4o-mini"
 
+[[durable_objects.bindings]]
+name = "HUD_HUB"
+class_name = "HudHub"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["HudHub"]
+
 # Replace `database_id` after running: wrangler d1 create jarvis
 [[d1_databases]]
 binding = "DB"

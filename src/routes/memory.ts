@@ -30,7 +30,7 @@ memory.post("/memory/:kind", async (c) => {
   }
 
   const store = new MemoryStore(c.env.DB);
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   try {
     const item = (await store.create(kind, body)) as { id: string };
     await bus.emit(`memory.${kind}.created`, "user", { id: item.id });
@@ -54,7 +54,7 @@ memory.patch("/memory/:kind/:id", async (c) => {
   }
 
   const store = new MemoryStore(c.env.DB);
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   try {
     const item = await store.update(kind, id, body);
     if (!item) return c.json({ error: "not found" }, 404);
@@ -71,7 +71,7 @@ memory.delete("/memory/:kind/:id", async (c) => {
   if (!isMemoryKind(kind)) return c.json({ error: "unknown kind" }, 400);
   const id = c.req.param("id");
   const store = new MemoryStore(c.env.DB);
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const ok = await store.delete(kind, id);
   if (!ok) return c.json({ error: "not found" }, 404);
   await bus.emit(`memory.${kind}.deleted`, "user", { id });

@@ -5,7 +5,7 @@ import { EventBus } from "../services/events";
 export const events = new Hono<{ Bindings: Env }>();
 
 events.get("/events", async (c) => {
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const since = parseIntParam(c.req.query("since"));
   const limit = parseIntParam(c.req.query("limit"));
   const kind = c.req.query("kind");

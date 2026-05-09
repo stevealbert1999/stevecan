@@ -174,6 +174,44 @@ export class ApiClient {
     return (await r.json()) as JarvisEvent[];
   }
 
+  async getState(): Promise<{
+    version: string;
+    butler_enabled: boolean;
+    memory: unknown;
+    threads_count: number;
+    pending_suggestions: Suggestion[];
+    recent_events: JarvisEvent[];
+    server_time: number;
+  }> {
+    const r = await fetch(this.url("/state"), { headers: this.headers() });
+    if (!r.ok) throw new Error(`getState ${r.status}`);
+    return r.json();
+  }
+
+  connectWebSocket(): WebSocket {
+    const wsUrl = this.settings.apiUrl.replace(/^http/, "ws").replace(/\/$/, "") +
+      `/ws?token=${encodeURIComponent(this.settings.apiKey)}`;
+    return new WebSocket(wsUrl);
+  }
+
+  async runRequest(opts: {
+    method: string;
+    path: string;
+    body?: string;
+  }): Promise<{ status: number; body: string }> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.settings.apiKey}`,
+    };
+    if (opts.body) headers["content-type"] = "application/json";
+    const r = await fetch(this.url(opts.path), {
+      method: opts.method,
+      headers,
+      body: opts.body || undefined,
+    });
+    const text = await r.text();
+    return { status: r.status, body: text };
+  }
+
   async chatStream(
     args: { thread_id?: string; message: string },
     onEvent: (e: StreamEvent) => void,

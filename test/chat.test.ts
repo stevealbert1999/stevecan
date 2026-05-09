@@ -7,6 +7,7 @@ import schema3 from "../migrations/0003_events_suggestions.sql?raw";
 declare module "cloudflare:test" {
   interface ProvidedEnv {
     DB: D1Database;
+    HUD_HUB: DurableObjectNamespace;
     JARVIS_API_KEY: string;
     OPENAI_API_KEY: string;
     JARVIS_MODEL: string;

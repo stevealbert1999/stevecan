@@ -1,5 +1,6 @@
 import { ApiClient, type Suggestion, type SuggestionStatus } from "./api";
 import { bindSettingsDialog, loadSettings } from "./auth";
+import { LiveBus } from "./live";
 
 const $ = <T extends Element>(s: string) => document.querySelector<T>(s)!;
 
@@ -131,8 +132,11 @@ function init() {
   client = new ApiClient(s);
   refresh();
 
-  // poll every 30s for new suggestions
-  setInterval(refresh, 30_000);
+  const bus = new LiveBus(client);
+  bus.on((e) => {
+    if (e.kind.startsWith("suggestion.")) refresh();
+  });
+  bus.start();
 }
 
 init();

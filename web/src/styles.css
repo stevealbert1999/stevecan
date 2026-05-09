@@ -243,8 +243,30 @@ dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; ma
 .suggestion .reason { margin: 0; color: var(--fg-dim); font-size: 13px; }
 .suggestion-actions { display: flex; gap: 8px; }
 
+.lab-main { padding: 24px; overflow-y: auto; }
+.lab-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.lab-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lab-card h3 { margin: 0; font-size: 14px; color: var(--fg-dim); display: flex; align-items: center; gap: 8px; }
+.lab-card pre { background: #0b0d10; padding: 8px; border-radius: 6px; max-height: 280px; overflow: auto; font-size: 12px; margin: 0; }
+.lab-card form { display: flex; flex-direction: column; gap: 8px; }
+.runner-row { display: flex; gap: 8px; }
+.runner-row select { flex: 0 0 90px; }
+.runner-row input { flex: 1; }
+.lab-card textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+
+.ws-pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--bg-elev); color: var(--fg-dim); border: 1px solid var(--border); font-weight: 500; }
+.ws-pill.ok { color: #5fffaa; border-color: #2a6e4d; }
+.ws-pill.bad { color: #ff8a80; border-color: #6e2a2a; }
+
+.event-stream { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.event-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.event-row code { color: var(--accent); }
+.event-meta { color: var(--fg-dim); font-size: 11px; }
+.event-row pre { margin: 4px 0 0; font-size: 11px; color: var(--fg-dim); }
+
 @media (max-width: 720px) {
   .layout { grid-template-columns: 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--border); height: auto; }
   .thread-list { max-height: 30vh; }
+  .lab-grid { grid-template-columns: 1fr; }
 }

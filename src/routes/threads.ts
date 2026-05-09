@@ -22,7 +22,7 @@ threads.get("/threads/:id", async (c) => {
 
 threads.delete("/threads/:id", async (c) => {
   const memory = new Memory(c.env.DB);
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
   const id = c.req.param("id");
   const ok = await memory.deleteThread(id);
   if (!ok) return c.json({ error: "not found" }, 404);

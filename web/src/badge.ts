@@ -1,5 +1,6 @@
 import { ApiClient } from "./api";
 import { loadSettings } from "./auth";
+import { getSharedLiveBus } from "./live";
 
 export async function refreshButlerBadge(): Promise<void> {
   const badge = document.querySelector<HTMLSpanElement>("#butler-badge");
@@ -20,4 +21,8 @@ export async function refreshButlerBadge(): Promise<void> {
 export function startBadgePolling(intervalMs = 60_000): void {
   refreshButlerBadge();
   setInterval(refreshButlerBadge, intervalMs);
+  const bus = getSharedLiveBus();
+  bus?.on((e) => {
+    if (e.kind.startsWith("suggestion.")) refreshButlerBadge();
+  });
 }

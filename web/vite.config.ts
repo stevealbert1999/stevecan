@@ -9,6 +9,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         memory: resolve(__dirname, "memory.html"),
         butler: resolve(__dirname, "butler.html"),
+        lab: resolve(__dirname, "lab.html"),
       },
     },
   },

@@ -31,7 +31,7 @@ async function maybeRunButler(
   if (env.JARVIS_BUTLER_ENABLED !== "true") return;
   if (!assistantReply.trim()) return;
 
-  const bus = new EventBus(env.DB);
+  const bus = new EventBus(env.DB, env.HUD_HUB);
   const store = new SuggestionsStore(env.DB, bus);
   try {
     await runButler({
@@ -66,7 +66,7 @@ chat.post("/chat", async (c) => {
 
   const memory = new Memory(c.env.DB);
   const store = new MemoryStore(c.env.DB);
-  const bus = new EventBus(c.env.DB);
+  const bus = new EventBus(c.env.DB, c.env.HUD_HUB);
 
   let thread = body.thread_id ? await memory.getThread(body.thread_id) : null;
   if (body.thread_id && !thread) {

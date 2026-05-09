@@ -10,7 +10,16 @@ export const bearerAuth: MiddlewareHandler<{ Bindings: Env }> = async (c, next) 
   }
 
   const prefix = "Bearer ";
-  if (!header.startsWith(prefix) || header.slice(prefix.length) !== expected) {
+  let provided = "";
+  if (header.startsWith(prefix)) {
+    provided = header.slice(prefix.length);
+  } else {
+    // WebSocket clients can't set custom headers; allow ?token=
+    const token = c.req.query("token");
+    if (token) provided = token;
+  }
+
+  if (provided !== expected) {
     return c.json({ error: "unauthorized" }, 401);
   }
 
