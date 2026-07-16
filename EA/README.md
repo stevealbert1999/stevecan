@@ -1,4 +1,4 @@
-# ASTUR Safe EA (v0.2) — EURUSD M15, MetaTrader 4
+# ASTUR Safe EA (v0.3) — EURUSD M15, MetaTrader 4
 
 ## Antes de leer nada más: lo que este EA NO es
 
@@ -42,6 +42,43 @@ así que no está incluida ni lo estará.
 3. **Filtro de horario de noticias** (`UseNewsFilter`, desactivado por
    defecto): bloquea nuevas entradas en una ventana alrededor de eventos
    económicos definidos en un CSV local.
+
+## Qué cambió en v0.3 respecto a v0.2
+
+"Más precisión" aquí significa: señales más selectivas, salidas más
+eficientes y menos coste de transacción desperdiciado — **no** una promesa
+de más ganancia garantizada (eso sigue siendo imposible). Nada de esto está
+validado con backtesting real todavía; hay que probarlo en el Strategy
+Tester antes de confiar en ello.
+
+1. **Entrada por puntuación de confluencia** (`BuildSignalContext`): los
+   tres filtros añadidos en v0.2 (confirmación H1, pendiente de tendencia,
+   pendiente de ADX) dejaron de ser un `AND` rígido — ahora cada uno suma
+   un punto y se exige un mínimo (`MinimumConfluenceScore`, por defecto 2
+   de un máximo de 3 filtros activos). Encadenar condiciones obligatorias
+   tiende a sobreajustar y a dejar el sistema sin operar casi nunca; un
+   sistema de puntos es más flexible sin renunciar a la calidad. El núcleo
+   de la señal (cruce de EMAs + posición respecto a la EMA de tendencia +
+   ADX mínimo + dirección del DI) sigue siendo obligatorio, no puntuable.
+2. **Cierre parcial por múltiplo del riesgo inicial** (`UsePartialClose`):
+   al alcanzar `PartialCloseAtR × R` de beneficio (donde R es la distancia
+   real al SL con la que se abrió la operación, no el ATR actual), se
+   cierra `PartialClosePct`% del lote y se deja correr el resto con el
+   breakeven/trailing ya existentes. Reduce la varianza asegurando parte
+   del beneficio sin renunciar a las tendencias largas.
+3. **Filtro de coste de transacción** (`MaxSpreadToSLRatio`): además del
+   límite absoluto de spread (`MaxSpreadPips`), rechaza la entrada si el
+   spread actual supera un porcentaje del stop loss planeado. Un SL muy
+   ajustado (volatilidad baja) con spread alto destruye la esperanza
+   matemática aunque la señal sea técnicamente correcta.
+4. **Log de diagnóstico en CSV** (`UseDiagnosticsLog`): registra, en cada
+   vela M15 cerrada, todos los valores de indicadores, el cruce detectado,
+   la puntuación de confluencia, si hubo señal final, si algún filtro la
+   bloqueó (spread, noticias, sesión, etc.) y el resultado de la orden si
+   se abrió. Se guarda en `MQL4/Files/ASTUR_Diagnostics.csv`. La idea es
+   que tú puedas analizarlo en Excel/Python para ver qué filtros realmente
+   aportan y cuáles solo recortan operaciones sin mejorar el resultado —
+   en vez de que se decida por intuición.
 
 ## Limitación honesta del filtro de noticias
 
@@ -89,14 +126,32 @@ descarga nada:
 
 | Input | Por defecto | Qué hace |
 |---|---|---|
-| `UseHigherTimeframeFilter` | `true` | Exige que H1 confirme la dirección de M15 |
+| `UseHigherTimeframeFilter` | `true` | Suma un punto de confluencia si H1 confirma la dirección de M15 |
 | `HigherTimeframe` | `PERIOD_H1` | Temporalidad usada para esa confirmación |
 | `HigherTrendEMAPeriod` | `200` | Periodo de la EMA de tendencia en esa temporalidad |
-| `UseTrendSlopeFilter` | `true` | Exige que la EMA de tendencia M15 tenga pendiente a favor |
-| `UseADXSlopeFilter` | `true` | Exige que el ADX esté subiendo (tendencia reforzándose) |
-| `UseBreakEven` / `BreakEvenTriggerATR` / `BreakEvenLockPips` | `true` / `1.0` / `1.0` | Mueve el SL a breakeven al alcanzar cierto beneficio |
+| `UseTrendSlopeFilter` | `true` | Suma un punto si la EMA de tendencia M15 tiene pendiente a favor |
+| `UseADXSlopeFilter` | `true` | Suma un punto si el ADX está subiendo (tendencia reforzándose) |
+| `MinimumConfluenceScore` | `2` | Puntos mínimos (de los filtros activos arriba) para permitir la entrada |
+| `UseBreakEven` / `BreakEvenTriggerATR` / `BreakEvenLockPips` | `true` / `1.0` / `1.0` | Mueve el SL a breakeven al alcanzar cierto beneficio (múltiplo de ATR en vivo) |
 | `UseTrailingStop` / `TrailingStartATR` / `TrailingStepATR` / `MinTrailingStepPips` | `true` / `1.5` / `1.0` / `0.5` | Trailing stop basado en ATR en vivo |
+| `UsePartialClose` / `PartialCloseAtR` / `PartialClosePct` | `true` / `1.0` / `50.0` | Cierra parte del lote al alcanzar N × R de beneficio (R = riesgo inicial real) |
+| `MaxSpreadToSLRatio` | `0.20` | Rechaza la entrada si el spread supera este % del SL planeado |
 | `UseNewsFilter` / `NewsFileName` / `NewsBufferMinutesBefore` / `NewsBufferMinutesAfter` / `NewsImpactFilter` / `NewsReloadMinutes` | `false` / `ASTUR_News.csv` / `30` / `15` / `HIGH` / `60` | Filtro de noticias vía CSV local |
+| `UseDiagnosticsLog` / `DiagnosticsFileName` | `true` / `ASTUR_Diagnostics.csv` | Log CSV de cada señal evaluada, tomada o bloqueada |
 
 Todos los filtros nuevos se pueden desactivar individualmente desde las
-propiedades del EA para volver al comportamiento equivalente a v0.1.
+propiedades del EA para volver a un comportamiento más parecido a v0.1.
+
+## Cómo usar el log de diagnóstico para decidir qué de verdad ayuda
+
+1. Corre el EA en Strategy Tester con `UseDiagnosticsLog=true` sobre varios
+   años de datos.
+2. Abre `ASTUR_Diagnostics.csv` (carpeta `MQL4/Files/`, o `Tester/Files/`
+   si corrió en el Strategy Tester) en Excel/Python.
+3. Compara: ¿cuántas señales con `Senal=BUY/SELL` fueron bloqueadas por
+   `Bloqueo` (spread, noticias, sesión...)? ¿El `ConfluenceScore` de las
+   operaciones ganadoras es sistemáticamente más alto que el de las
+   perdedoras? Eso te dice si el filtro correspondiente realmente aporta
+   o si solo está recortando operaciones al azar.
+4. Ajusta un input a la vez y vuelve a correr — cambiar varios a la vez
+   hace imposible saber cuál causó la diferencia.

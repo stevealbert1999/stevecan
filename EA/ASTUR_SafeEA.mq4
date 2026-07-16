@@ -1,28 +1,32 @@
 #property strict
-#property version   "0.20"
+#property version   "0.30"
 #property description "ASTUR Safe EA: prototipo demo-first para EURUSD M15"
 #property description "Sin martingala, grid ni promedios. SL obligatorio y riesgo limitado."
 #property description "v0.2: gestion de posicion por tick (breakeven/trailing), filtros de senal reforzados y filtro de noticias opcional via CSV."
+#property description "v0.3: cierre parcial por R, entrada por puntuacion de confluencia, filtro de coste spread/SL y log de diagnostico en CSV."
 
 // IMPORTANTE (leer antes de usar):
 // - Ningun EA, por bueno que sea, puede garantizar ganancias ni evitar todas
 //   las perdidas. Cualquiera que ofrezca eso miente. Este EA busca operar
 //   con una ventaja estadistica razonable y un riesgo controlado, nada mas.
+//   "Mejor precision" en esta version significa: senales mas selectivas,
+//   salidas mas eficientes y menos coste de transaccion desperdiciado, NO
+//   una promesa de mas ganancia garantizada.
 // - MetaTrader 4 NO es una plataforma de alta frecuencia (HFT). OnTick() se
 //   ejecuta con cada tick que el broker envia (tipicamente decenas a
 //   cientos de milisegundos de latencia, a veces mas), sin ejecucion
 //   co-localizada ni acceso a microestructura del order book. La gestion de
-//   posicion (breakeven/trailing) reacciona a cada tick recibido, que es lo
-//   mas "en vivo" que esta plataforma permite, no trading de alta frecuencia
-//   institucional.
+//   posicion (breakeven/trailing/cierre parcial) reacciona a cada tick
+//   recibido, que es lo mas "en vivo" que esta plataforma permite.
 // - AllowRealAccount=false bloquea cuentas reales por defecto.
 // - El filtro de noticias (UseNewsFilter) NO descarga nada de internet: lee
 //   un CSV local (MQL4/Files/<NewsFileName>) que el usuario debe mantener
 //   actualizado manualmente o mediante un proceso externo. Si se activa y
 //   el archivo falta o no se puede leer, el EA bloquea nuevas entradas por
 //   seguridad (fail-safe), nunca al reves. Ver EA/README.md para el formato.
-// - Probar primero en Strategy Tester y despues en una cuenta DEMO separada
-//   antes de considerar una cuenta real, incluso con AllowRealAccount=true.
+// - Ninguna mejora de este archivo esta validada con backtesting real: hay
+//   que probarla en Strategy Tester (idealmente walk-forward) y despues en
+//   una cuenta DEMO separada antes de considerar una cuenta real.
 
 input bool   AllowRealAccount       = false;
 input bool   ResetRiskBaselines     = false;
@@ -55,15 +59,20 @@ input double MinimumATRPips         = 2.00;
 input double MaximumATRPips         = 20.00;
 input double MaxSignalCandleATR     = 1.50;
 
-// Filtros de senal reforzados (cada uno reduce falsas entradas a costa de
-// operar con menos frecuencia; ninguno elimina el riesgo, solo lo reduce)
+// Filtros de confluencia (senal reforzada): cada uno suma un punto en vez
+// de exigirse todos con un AND rigido. Se entra solo si el numero de
+// aciertos alcanza MinimumConfluenceScore (de un maximo igual al numero de
+// filtros activos). Esto es mas flexible y menos propenso a sobreajuste
+// que encadenar condiciones obligatorias.
 input bool             UseHigherTimeframeFilter = true;
 input ENUM_TIMEFRAMES  HigherTimeframe          = PERIOD_H1;
 input int              HigherTrendEMAPeriod     = 200;
 input bool             UseTrendSlopeFilter      = true;
 input bool             UseADXSlopeFilter        = true;
+input int              MinimumConfluenceScore   = 2;
 
-// Gestion de posicion abierta en cada tick (breakeven / trailing por ATR)
+// Gestion de posicion abierta en cada tick (breakeven / trailing por ATR
+// en vivo, y cierre parcial por multiplo del riesgo inicial de la orden)
 input bool   UseBreakEven           = true;
 input double BreakEvenTriggerATR    = 1.00;
 input double BreakEvenLockPips      = 1.00;
@@ -71,6 +80,14 @@ input bool   UseTrailingStop        = true;
 input double TrailingStartATR       = 1.50;
 input double TrailingStepATR        = 1.00;
 input double MinTrailingStepPips    = 0.50;
+input bool   UsePartialClose        = true;
+input double PartialCloseAtR        = 1.00;
+input double PartialClosePct        = 50.00;
+
+// Filtro de coste de transaccion: rechaza la entrada si el spread pesa
+// demasiado sobre el stop loss planeado. Un SL ajustado con spread alto
+// destruye la esperanza matematica aunque la senal en si sea buena.
+input double MaxSpreadToSLRatio     = 0.20;
 
 // Filtro de noticias opcional, basado en un CSV local (ver README)
 input bool   UseNewsFilter          = false;
@@ -80,10 +97,17 @@ input int    NewsBufferMinutesAfter = 15;
 input string NewsImpactFilter       = "HIGH";
 input int    NewsReloadMinutes      = 60;
 
-datetime g_lastBarTime = 0;
-string   g_statePrefix = "";
-string   g_status      = "Inicializando";
+// Diagnostico: registra cada senal evaluada (tomada o no) en un CSV local
+// para poder analizar fuera de MT4 (Excel/Python) que filtros aportan de
+// verdad, en vez de adivinarlo.
+input bool   UseDiagnosticsLog      = true;
+input string DiagnosticsFileName    = "ASTUR_Diagnostics.csv";
+
+datetime g_lastBarTime    = 0;
+string   g_statePrefix    = "";
+string   g_status         = "Inicializando";
 bool     g_riskStopAnnounced = false;
+int      g_lastKnownTicket   = 0;
 
 struct AsturNewsEvent
   {
@@ -95,6 +119,18 @@ AsturNewsEvent g_newsEvents[];
 int            g_newsCount       = 0;
 datetime       g_newsLastLoad    = 0;
 bool           g_newsFileMissing = false;
+
+struct AsturSignalContext
+  {
+   double fast1, fast2, slow1, slow2, trend1, trend2;
+   double adx1, adx2, plus1, minus1;
+   double atr1, atrPips;
+   double open1, close1, candleRatio;
+   int    crossDirection;   // 1 = cruce alcista, -1 = cruce bajista, 0 = sin cruce
+   int    confluenceScore, confluenceMax;
+   bool   htfOk, trendSlopeOk, adxSlopeOk;
+   int    finalSignal;      // -1/0/1 tras todos los filtros de calidad
+  };
 
 //+------------------------------------------------------------------+
 //| Inicializacion                                                    |
@@ -132,7 +168,7 @@ int OnInit()
       g_status = "Listo; esperando una senal cerrada";
 
    UpdateDashboard();
-   Print("ASTUR Safe EA v0.2 iniciado. Cuenta=", AccountNumber(),
+   Print("ASTUR Safe EA v0.3 iniciado. Cuenta=", AccountNumber(),
          ", modo=", (IsDemo() ? "DEMO" : "REAL"),
          ", simbolo=", Symbol(), ", periodo=M15");
    return(INIT_SUCCEEDED);
@@ -178,8 +214,9 @@ void OnTick()
      }
    g_riskStopAnnounced = false;
 
-   // Gestion de la posicion abierta en cada tick (breakeven / trailing), no
-   // solo al cierre de vela: es la parte mas "en vivo" que MT4 permite.
+   // Gestion de la posicion abierta en cada tick (breakeven / trailing /
+   // cierre parcial), no solo al cierre de vela: es la parte mas "en vivo"
+   // que MT4 permite.
    ManageOpenPosition();
 
    MaybeReloadNews();
@@ -192,23 +229,31 @@ void OnTick()
       return;
      }
 
-   string blockReason = "";
-   if(!CanOpenNewTrade(blockReason))
-     {
-      g_status = "Sin entrada: " + blockReason;
-      UpdateDashboard();
-      return;
-     }
+   AsturSignalContext ctx;
+   BuildSignalContext(ctx);
 
-   int signal = GetClosedBarSignal();
-   if(signal == 0)
+   string blockReason = "";
+   bool   canTrade = CanOpenNewTrade(blockReason);
+
+   int    ticket = 0;
+   double lots = 0.0, sl = 0.0, tp = 0.0;
+   string tradeResult = "";
+
+   if(ctx.finalSignal == 0)
      {
       g_status = "Sin senal valida en la ultima vela";
-      UpdateDashboard();
-      return;
+     }
+   else if(!canTrade)
+     {
+      g_status = "Sin entrada: " + blockReason;
+     }
+   else
+     {
+      ExecuteSignal(ctx.finalSignal, ticket, lots, sl, tp);
+      tradeResult = (ticket > 0 ? "ABIERTO" : "FALLIDO");
      }
 
-   ExecuteSignal(signal);
+   LogSignalDiagnostic(ctx, (canTrade ? "" : blockReason), tradeResult, ticket, lots, sl, tp);
    UpdateDashboard();
   }
 
@@ -261,6 +306,12 @@ bool InputsAreValid()
       return(false);
      }
 
+   if(MinimumConfluenceScore < 0 || MinimumConfluenceScore > 3)
+     {
+      Print("MinimumConfluenceScore debe estar entre 0 y 3.");
+      return(false);
+     }
+
    if(UseBreakEven && (BreakEvenTriggerATR <= 0.0 || BreakEvenLockPips < 0.0))
      {
       Print("Parametros de breakeven invalidos.");
@@ -273,10 +324,28 @@ bool InputsAreValid()
       return(false);
      }
 
+   if(UsePartialClose && (PartialCloseAtR <= 0.0 || PartialClosePct <= 0.0 || PartialClosePct > 100.0))
+     {
+      Print("Parametros de cierre parcial invalidos.");
+      return(false);
+     }
+
+   if(MaxSpreadToSLRatio <= 0.0 || MaxSpreadToSLRatio > 1.0)
+     {
+      Print("MaxSpreadToSLRatio debe estar entre 0 (excluido) y 1.");
+      return(false);
+     }
+
    if(UseNewsFilter && (NewsBufferMinutesBefore < 0 || NewsBufferMinutesAfter < 0 ||
       NewsReloadMinutes <= 0 || StringLen(NewsFileName) == 0))
      {
       Print("Parametros del filtro de noticias invalidos.");
+      return(false);
+     }
+
+   if(UseDiagnosticsLog && StringLen(DiagnosticsFileName) == 0)
+     {
+      Print("DiagnosticsFileName no puede estar vacio si UseDiagnosticsLog esta activo.");
       return(false);
      }
 
@@ -440,66 +509,95 @@ bool CanOpenNewTrade(string &reason)
   }
 
 //+------------------------------------------------------------------+
-//| Senal sobre velas cerradas                                        |
+//| Construccion del contexto de senal sobre velas cerradas            |
+//| Rellena TODOS los campos (incluso si no hay senal final) para que  |
+//| el log de diagnostico pueda registrar cada evaluacion.             |
 //+------------------------------------------------------------------+
-int GetClosedBarSignal()
+void BuildSignalContext(AsturSignalContext &ctx)
   {
-   double fast1  = iMA(NULL, PERIOD_M15, FastEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
-   double fast2  = iMA(NULL, PERIOD_M15, FastEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 2);
-   double slow1  = iMA(NULL, PERIOD_M15, SlowEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
-   double slow2  = iMA(NULL, PERIOD_M15, SlowEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 2);
-   double trend1 = iMA(NULL, PERIOD_M15, TrendEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
-   double trend2 = iMA(NULL, PERIOD_M15, TrendEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 2);
-   double adx1   = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 1);
-   double adx2   = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 2);
-   double plus1  = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_PLUSDI, 1);
-   double minus1 = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MINUSDI, 1);
-   double atr1   = iATR(NULL, PERIOD_M15, ATRPeriod, 1);
-   double open1  = iOpen(NULL, PERIOD_M15, 1);
-   double close1 = iClose(NULL, PERIOD_M15, 1);
+   ctx.fast1  = iMA(NULL, PERIOD_M15, FastEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+   ctx.fast2  = iMA(NULL, PERIOD_M15, FastEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 2);
+   ctx.slow1  = iMA(NULL, PERIOD_M15, SlowEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+   ctx.slow2  = iMA(NULL, PERIOD_M15, SlowEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 2);
+   ctx.trend1 = iMA(NULL, PERIOD_M15, TrendEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+   ctx.trend2 = iMA(NULL, PERIOD_M15, TrendEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 2);
+   ctx.adx1   = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 1);
+   ctx.adx2   = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 2);
+   ctx.plus1  = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_PLUSDI, 1);
+   ctx.minus1 = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MINUSDI, 1);
+   ctx.atr1   = iATR(NULL, PERIOD_M15, ATRPeriod, 1);
+   ctx.open1  = iOpen(NULL, PERIOD_M15, 1);
+   ctx.close1 = iClose(NULL, PERIOD_M15, 1);
 
-   if(atr1 <= 0.0)
-      return(0);
+   ctx.atrPips     = (ctx.atr1 > 0.0 ? ctx.atr1 / PipSize() : 0.0);
+   ctx.candleRatio = (ctx.atr1 > 0.0 ? MathAbs(ctx.close1 - ctx.open1) / ctx.atr1 : 0.0);
 
-   double atrPips    = atr1 / PipSize();
-   double candleSize = MathAbs(close1 - open1);
+   ctx.crossDirection = 0;
+   if(ctx.fast2 <= ctx.slow2 && ctx.fast1 > ctx.slow1)
+      ctx.crossDirection = 1;
+   else if(ctx.fast2 >= ctx.slow2 && ctx.fast1 < ctx.slow1)
+      ctx.crossDirection = -1;
 
-   if(atrPips < MinimumATRPips || atrPips > MaximumATRPips)
-      return(0);
+   ctx.confluenceScore = 0;
+   ctx.confluenceMax   = 0;
+   ctx.htfOk           = true;
+   ctx.trendSlopeOk    = true;
+   ctx.adxSlopeOk      = true;
+   ctx.finalSignal     = 0;
 
-   // Evita perseguir una vela anormalmente grande; no sustituye el filtro
-   // de noticias economicas dedicado (ver UseNewsFilter).
-   if(candleSize > atr1 * MaxSignalCandleATR)
-      return(0);
+   // Filtros duros: si fallan, no hay senal, independientemente de la
+   // puntuacion de confluencia (evitan operar sin volatilidad suficiente,
+   // sobre una vela anomala, o directamente en contra de la tendencia).
+   if(ctx.atr1 <= 0.0)
+      return;
+   if(ctx.atrPips < MinimumATRPips || ctx.atrPips > MaximumATRPips)
+      return;
+   if(ctx.candleRatio > MaxSignalCandleATR)
+      return;
+   if(ctx.crossDirection == 0)
+      return;
 
-   bool buySignal = (fast2 <= slow2 && fast1 > slow1 &&
-                     close1 > trend1 && adx1 >= MinimumADX && plus1 > minus1);
+   bool trendOk = (ctx.crossDirection > 0 ? ctx.close1 > ctx.trend1 : ctx.close1 < ctx.trend1);
+   bool diOk    = (ctx.crossDirection > 0 ? ctx.plus1 > ctx.minus1 : ctx.minus1 > ctx.plus1);
+   bool adxOk   = (ctx.adx1 >= MinimumADX);
 
-   bool sellSignal = (fast2 >= slow2 && fast1 < slow1 &&
-                      close1 < trend1 && adx1 >= MinimumADX && minus1 > plus1);
+   if(!trendOk || !diOk || !adxOk)
+      return;
 
-   // Filtros adicionales, cada uno opcional: exigen mas calidad a la senal
-   // a costa de operar con menos frecuencia. Ninguno elimina el riesgo.
-   if(buySignal && UseTrendSlopeFilter && !(trend1 > trend2))
-      buySignal = false;
-   if(sellSignal && UseTrendSlopeFilter && !(trend1 < trend2))
-      sellSignal = false;
+   // Filtros de confluencia (blandos): suman puntos en vez de bloquear
+   // individualmente. Se exige un minimo, no la totalidad.
+   if(UseHigherTimeframeFilter)
+     {
+      ctx.confluenceMax++;
+      ctx.htfOk = HigherTimeframeAligned(ctx.crossDirection);
+      if(ctx.htfOk)
+         ctx.confluenceScore++;
+     }
 
-   if(buySignal && UseADXSlopeFilter && !(adx1 > adx2))
-      buySignal = false;
-   if(sellSignal && UseADXSlopeFilter && !(adx1 > adx2))
-      sellSignal = false;
+   if(UseTrendSlopeFilter)
+     {
+      ctx.confluenceMax++;
+      ctx.trendSlopeOk = (ctx.crossDirection > 0 ? ctx.trend1 > ctx.trend2 : ctx.trend1 < ctx.trend2);
+      if(ctx.trendSlopeOk)
+         ctx.confluenceScore++;
+     }
 
-   if(buySignal && !HigherTimeframeAligned(1))
-      buySignal = false;
-   if(sellSignal && !HigherTimeframeAligned(-1))
-      sellSignal = false;
+   if(UseADXSlopeFilter)
+     {
+      ctx.confluenceMax++;
+      ctx.adxSlopeOk = (ctx.adx1 > ctx.adx2);
+      if(ctx.adxSlopeOk)
+         ctx.confluenceScore++;
+     }
 
-   if(buySignal)
-      return(1);
-   if(sellSignal)
-      return(-1);
-   return(0);
+   if(ctx.confluenceMax > 0)
+     {
+      int required = MathMin(MinimumConfluenceScore, ctx.confluenceMax);
+      if(ctx.confluenceScore < required)
+         return;
+     }
+
+   ctx.finalSignal = ctx.crossDirection;
   }
 
 //+------------------------------------------------------------------+
@@ -529,8 +627,13 @@ bool HigherTimeframeAligned(const int signal)
 //+------------------------------------------------------------------+
 //| Envio de orden con SL/TP desde el primer momento                  |
 //+------------------------------------------------------------------+
-void ExecuteSignal(const int signal)
+void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &outSL, double &outTP)
   {
+   outTicket = 0;
+   outLots   = 0.0;
+   outSL     = 0.0;
+   outTP     = 0.0;
+
    RefreshRates();
 
    double spreadPips = (Ask - Bid) / PipSize();
@@ -547,6 +650,16 @@ void ExecuteSignal(const int signal)
    double brokerMin    = (MarketInfo(Symbol(), MODE_STOPLEVEL) + 2.0) * Point;
    double stopDistance = MathMax(atr * ATRStopMultiple, brokerMin);
    double takeDistance = stopDistance * RewardRiskRatio;
+
+   // Filtro de coste de transaccion: si el spread actual pesa demasiado
+   // sobre el SL planeado, la esperanza matematica se deteriora aunque la
+   // senal sea correcta. Mejor no operar que pagar un coste desproporcionado.
+   if((Ask - Bid) > stopDistance * MaxSpreadToSLRatio)
+     {
+      g_status = "Orden cancelada: spread demasiado alto respecto al SL (" +
+                 DoubleToString((Ask - Bid) / stopDistance * 100.0, 1) + "% del riesgo)";
+      return;
+     }
 
    double stopLoss   = (signal > 0 ? entry - stopDistance : entry + stopDistance);
    double takeProfit = (signal > 0 ? entry + takeDistance : entry - takeDistance);
@@ -577,7 +690,7 @@ void ExecuteSignal(const int signal)
 
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, lots, entry, slippagePoints,
-                          stopLoss, takeProfit, "ASTUR_SAFE_V0.2",
+                          stopLoss, takeProfit, "ASTUR_SAFE_V0.3",
                           MagicNumber, 0, arrowColor);
 
    if(ticket < 0)
@@ -597,6 +710,15 @@ void ExecuteSignal(const int signal)
       CloseTicketImmediately(ticket);
       return;
      }
+
+   // Riesgo inicial (R) persistido por ticket: base para el cierre parcial.
+   GlobalVariableSet(g_statePrefix + "RISK_" + IntegerToString(ticket), stopDistance);
+   GlobalVariableSet(g_statePrefix + "PARTIAL_" + IntegerToString(ticket), 0);
+
+   outTicket = ticket;
+   outLots   = lots;
+   outSL     = stopLoss;
+   outTP     = takeProfit;
 
    g_status = "Operacion abierta; ticket " + IntegerToString(ticket);
    Print("ASTUR Safe EA: ticket=", ticket,
@@ -640,13 +762,14 @@ double CalculateRiskLots(const double entry, const double stopLoss)
   }
 
 //+------------------------------------------------------------------+
-//| Gestion de posicion abierta en cada tick (breakeven / trailing)   |
+//| Gestion de la (unica) posicion abierta en cada tick:               |
+//| cierre parcial por R, luego breakeven / trailing por ATR en vivo. |
 //| El SL solo se mueve para reducir riesgo, nunca para aumentarlo.   |
 //+------------------------------------------------------------------+
 void ManageOpenPosition()
   {
-   if(!UseBreakEven && !UseTrailingStop)
-      return;
+   int openTicket = 0;
+   int openType   = -1;
 
    for(int pos = OrdersTotal() - 1; pos >= 0; pos--)
      {
@@ -654,66 +777,145 @@ void ManageOpenPosition()
          continue;
       if(OrderMagicNumber() != MagicNumber || OrderSymbol() != Symbol())
          continue;
-
       int type = OrderType();
       if(type != OP_BUY && type != OP_SELL)
          continue;
-
-      double atr = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
-      if(atr <= 0.0)
-         continue;
-
-      RefreshRates();
-
-      int    ticket       = OrderTicket();
-      double openPrice    = OrderOpenPrice();
-      double currentSL    = OrderStopLoss();
-      double takeProfit   = OrderTakeProfit();
-      double minLockDist  = (MarketInfo(Symbol(), MODE_STOPLEVEL) + 2.0) * Point;
-      double minStepPrice = MathMax(MinTrailingStepPips * PipSize(), Point);
-      double candidateSL  = currentSL;
-
-      if(type == OP_BUY)
-        {
-         double profit = Bid - openPrice;
-
-         if(UseBreakEven && profit >= BreakEvenTriggerATR * atr)
-            candidateSL = MathMax(candidateSL, openPrice + BreakEvenLockPips * PipSize());
-
-         if(UseTrailingStop && profit >= TrailingStartATR * atr)
-            candidateSL = MathMax(candidateSL, Bid - TrailingStepATR * atr);
-
-         candidateSL = MathMin(candidateSL, Bid - minLockDist);
-
-         if(candidateSL - currentSL < minStepPrice)
-            continue;
-        }
-      else
-        {
-         double profit = openPrice - Ask;
-
-         if(UseBreakEven && profit >= BreakEvenTriggerATR * atr)
-            candidateSL = MathMin(candidateSL, openPrice - BreakEvenLockPips * PipSize());
-
-         if(UseTrailingStop && profit >= TrailingStartATR * atr)
-            candidateSL = MathMin(candidateSL, Ask + TrailingStepATR * atr);
-
-         candidateSL = MathMax(candidateSL, Ask + minLockDist);
-
-         if(currentSL - candidateSL < minStepPrice)
-            continue;
-        }
-
-      candidateSL = NormalizeDouble(candidateSL, Digits);
-
-      ResetLastError();
-      if(!OrderModify(ticket, openPrice, candidateSL, takeProfit, 0, clrYellow))
-         Print("ASTUR Safe EA: OrderModify (breakeven/trailing) fallo ticket=", ticket,
-               ". Error=", GetLastError());
-      else
-         Print("ASTUR Safe EA: SL protegido actualizado. ticket=", ticket,
-               ", nuevoSL=", DoubleToString(candidateSL, Digits));
+      openTicket = OrderTicket();
+      openType   = type;
+      break; // el EA nunca mantiene mas de una operacion a la vez
      }
+
+   if(openTicket == 0)
+     {
+      if(g_lastKnownTicket != 0)
+        {
+         CleanupOrderState(g_lastKnownTicket);
+         g_lastKnownTicket = 0;
+        }
+      return;
+     }
+   g_lastKnownTicket = openTicket;
+
+   if(!UseBreakEven && !UseTrailingStop && !UsePartialClose)
+      return;
+
+   if(!OrderSelect(openTicket, SELECT_BY_TICKET))
+      return;
+
+   double atr = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
+   if(atr <= 0.0)
+      return;
+
+   RefreshRates();
+
+   double openPrice = OrderOpenPrice();
+   double currentSL = OrderStopLoss();
+   double lots      = OrderLots();
+
+   string riskVarName    = g_statePrefix + "RISK_" + IntegerToString(openTicket);
+   string partialVarName = g_statePrefix + "PARTIAL_" + IntegerToString(openTicket);
+   double initialRisk = GlobalVariableCheck(riskVarName) ? GlobalVariableGet(riskVarName) : 0.0;
+   if(initialRisk <= 0.0)
+      initialRisk = MathAbs(openPrice - currentSL); // respaldo si el estado no esta disponible
+
+   if(UsePartialClose && initialRisk > 0.0 &&
+      (!GlobalVariableCheck(partialVarName) || GlobalVariableGet(partialVarName) < 1.0))
+     {
+      double profitNow = (openType == OP_BUY ? Bid - openPrice : openPrice - Ask);
+      if(profitNow >= PartialCloseAtR * initialRisk)
+        {
+         double minLot  = MarketInfo(Symbol(), MODE_MINLOT);
+         double lotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
+
+         double closeLots = MathFloor((lots * PartialClosePct / 100.0) / lotStep + 1e-8) * lotStep;
+         closeLots = NormalizeDouble(closeLots, LotDigits());
+
+         bool fullClose = (closeLots >= lots - lotStep * 0.5);
+         if(fullClose)
+            closeLots = NormalizeDouble(lots, LotDigits());
+
+         double remainder = NormalizeDouble(lots - closeLots, LotDigits());
+
+         if(closeLots >= minLot && (fullClose || remainder >= minLot))
+           {
+            double closePrice = (openType == OP_BUY ? Bid : Ask);
+            ResetLastError();
+            if(OrderClose(openTicket, closeLots, closePrice, PipsToPoints(MaxSlippagePips), clrLime))
+              {
+               GlobalVariableSet(partialVarName, 1);
+               Print("ASTUR Safe EA: cierre parcial ejecutado. ticket=", openTicket,
+                     ", lotes cerrados=", DoubleToString(closeLots, LotDigits()));
+              }
+            else
+               Print("ASTUR Safe EA: cierre parcial fallo. ticket=", openTicket,
+                     ". Error=", GetLastError());
+           }
+         else
+            GlobalVariableSet(partialVarName, 1); // lote demasiado pequeno para partir; no reintentar cada tick
+        }
+     }
+
+   // El cierre parcial puede haber modificado la orden (o cerrado del todo);
+   // releer antes de aplicar breakeven/trailing.
+   if(!OrderSelect(openTicket, SELECT_BY_TICKET))
+      return;
+
+   currentSL = OrderStopLoss();
+   double takeProfit = OrderTakeProfit();
+   openPrice = OrderOpenPrice();
+
+   double minLockDist  = (MarketInfo(Symbol(), MODE_STOPLEVEL) + 2.0) * Point;
+   double minStepPrice = MathMax(MinTrailingStepPips * PipSize(), Point);
+   double candidateSL  = currentSL;
+
+   if(openType == OP_BUY)
+     {
+      double profit = Bid - openPrice;
+
+      if(UseBreakEven && profit >= BreakEvenTriggerATR * atr)
+         candidateSL = MathMax(candidateSL, openPrice + BreakEvenLockPips * PipSize());
+
+      if(UseTrailingStop && profit >= TrailingStartATR * atr)
+         candidateSL = MathMax(candidateSL, Bid - TrailingStepATR * atr);
+
+      candidateSL = MathMin(candidateSL, Bid - minLockDist);
+
+      if(candidateSL - currentSL < minStepPrice)
+         return;
+     }
+   else
+     {
+      double profit = openPrice - Ask;
+
+      if(UseBreakEven && profit >= BreakEvenTriggerATR * atr)
+         candidateSL = MathMin(candidateSL, openPrice - BreakEvenLockPips * PipSize());
+
+      if(UseTrailingStop && profit >= TrailingStartATR * atr)
+         candidateSL = MathMin(candidateSL, Ask + TrailingStepATR * atr);
+
+      candidateSL = MathMax(candidateSL, Ask + minLockDist);
+
+      if(currentSL - candidateSL < minStepPrice)
+         return;
+     }
+
+   candidateSL = NormalizeDouble(candidateSL, Digits);
+
+   ResetLastError();
+   if(!OrderModify(openTicket, openPrice, candidateSL, takeProfit, 0, clrYellow))
+      Print("ASTUR Safe EA: OrderModify (breakeven/trailing) fallo ticket=", openTicket,
+            ". Error=", GetLastError());
+   else
+      Print("ASTUR Safe EA: SL protegido actualizado. ticket=", openTicket,
+            ", nuevoSL=", DoubleToString(candidateSL, Digits));
+  }
+
+void CleanupOrderState(const int ticket)
+  {
+   if(ticket == 0)
+      return;
+   GlobalVariableDel(g_statePrefix + "RISK_" + IntegerToString(ticket));
+   GlobalVariableDel(g_statePrefix + "PARTIAL_" + IntegerToString(ticket));
   }
 
 //+------------------------------------------------------------------+
@@ -879,6 +1081,77 @@ bool NewsBlackoutActive(string &reason)
   }
 
 //+------------------------------------------------------------------+
+//| Diagnostico: log CSV de cada senal evaluada (tomada o no)         |
+//+------------------------------------------------------------------+
+string CsvSafe(string text)
+  {
+   StringReplace(text, ",", ";");
+   StringReplace(text, "\n", " ");
+   StringReplace(text, "\r", " ");
+   return(text);
+  }
+
+void AppendToCsv(const string fileName, const string header, const string line)
+  {
+   bool needsHeader = !FileIsExist(fileName);
+   int handle = FileOpen(fileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+     {
+      Print("ASTUR Safe EA: no se pudo abrir ", fileName, " para diagnostico. Error=", GetLastError());
+      return;
+     }
+
+   FileSeek(handle, 0, SEEK_END);
+   if(needsHeader)
+      FileWriteString(handle, header + "\r\n");
+   FileWriteString(handle, line + "\r\n");
+   FileClose(handle);
+  }
+
+void LogSignalDiagnostic(const AsturSignalContext &ctx, const string blockReason, const string tradeResult,
+                          const int ticket, const double lots, const double sl, const double tp)
+  {
+   if(!UseDiagnosticsLog)
+      return;
+
+   RefreshRates();
+   double spreadPips = (PipSize() > 0.0 ? (Ask - Bid) / PipSize() : 0.0);
+
+   string cruceStr = (ctx.crossDirection > 0 ? "ALCISTA" : (ctx.crossDirection < 0 ? "BAJISTA" : "NINGUNO"));
+   string senalStr  = (ctx.finalSignal > 0 ? "BUY" : (ctx.finalSignal < 0 ? "SELL" : "NONE"));
+
+   string line = TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "," +
+                 Symbol() + "," +
+                 DoubleToString(ctx.close1, Digits) + "," +
+                 DoubleToString(ctx.fast1, Digits) + "," +
+                 DoubleToString(ctx.slow1, Digits) + "," +
+                 DoubleToString(ctx.trend1, Digits) + "," +
+                 DoubleToString(ctx.adx1, 2) + "," +
+                 DoubleToString(ctx.plus1, 2) + "," +
+                 DoubleToString(ctx.minus1, 2) + "," +
+                 DoubleToString(ctx.atrPips, 2) + "," +
+                 DoubleToString(ctx.candleRatio, 2) + "," +
+                 cruceStr + "," +
+                 IntegerToString(ctx.confluenceScore) + "," +
+                 IntegerToString(ctx.confluenceMax) + "," +
+                 (ctx.htfOk ? "SI" : "NO") + "," +
+                 (ctx.trendSlopeOk ? "SI" : "NO") + "," +
+                 (ctx.adxSlopeOk ? "SI" : "NO") + "," +
+                 senalStr + "," +
+                 CsvSafe(blockReason) + "," +
+                 tradeResult + "," +
+                 IntegerToString(ticket) + "," +
+                 DoubleToString(lots, LotDigits()) + "," +
+                 DoubleToString(sl, Digits) + "," +
+                 DoubleToString(tp, Digits) + "," +
+                 DoubleToString(spreadPips, 2);
+
+   AppendToCsv(DiagnosticsFileName,
+      "Timestamp,Simbolo,Cierre,EMA_Fast,EMA_Slow,EMA_Trend,ADX,DIplus,DIminus,ATR_pips,CandleATRratio,Cruce,ConfluenceScore,ConfluenceMax,HTF_OK,TrendSlopeOK,ADXSlopeOK,Senal,Bloqueo,Resultado,Ticket,Lotes,SL,TP,SpreadPips",
+      line);
+  }
+
+//+------------------------------------------------------------------+
 //| Utilidades                                                        |
 //+------------------------------------------------------------------+
 bool IsNewBar()
@@ -950,7 +1223,9 @@ void UpdateDashboard()
                  "Noticias: ACTIVO, archivo no encontrado (bloqueando entradas)" :
                  "Noticias: activo, " + IntegerToString(g_newsCount) + " eventos";
 
-   Comment("ASTUR Safe EA v0.2\n",
+   string diagLine = UseDiagnosticsLog ? "Diagnostico: activo (" + DiagnosticsFileName + ")" : "Diagnostico: inactivo";
+
+   Comment("ASTUR Safe EA v0.3\n",
            "Modo: ", (IsDemo() ? "DEMO" : "REAL"),
            " | Real permitido: ", (AllowRealAccount ? "SI" : "NO"), "\n",
            "Cuenta: ", AccountNumber(), " | ", Symbol(), " M15\n",
@@ -959,6 +1234,7 @@ void UpdateDashboard()
            "Riesgo/operacion: ", DoubleToString(RiskPerTradePct, 2),
            "% | Spread: ", DoubleToString(spreadPips, 2), " pips\n",
            newsLine, "\n",
+           diagLine, "\n",
            "Operaciones EA: ", CountEAOrders(), "\n",
            "Estado: ", g_status);
   }
