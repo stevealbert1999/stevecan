@@ -1,9 +1,11 @@
 #property strict
-#property version   "0.30"
+#property version   "0.32"
 #property description "ASTUR Safe EA: prototipo demo-first para EURUSD M15"
 #property description "Sin martingala, grid ni promedios. SL obligatorio y riesgo limitado."
 #property description "v0.2: gestion de posicion por tick (breakeven/trailing), filtros de senal reforzados y filtro de noticias opcional via CSV."
 #property description "v0.3: cierre parcial por R, entrada por puntuacion de confluencia, filtro de coste spread/SL y log de diagnostico en CSV."
+#property description "v0.31: comparacion robusta del spread en puntos y diagnostico de cancelaciones de ejecucion."
+#property description "v0.32: cierre parcial ligado a la hora de apertura de la operacion (a prueba de cambio de ticket), NO integracion de IA todavia."
 
 // IMPORTANTE (leer antes de usar):
 // - Ningun EA, por bueno que sea, puede garantizar ganancias ni evitar todas
@@ -24,6 +26,10 @@
 //   actualizado manualmente o mediante un proceso externo. Si se activa y
 //   el archivo falta o no se puede leer, el EA bloquea nuevas entradas por
 //   seguridad (fail-safe), nunca al reves. Ver EA/README.md para el formato.
+// - El puente de IA (EA/astur_ai_bridge.py) es un servicio aparte: este
+//   .mq4 TODAVIA no le hace ninguna llamada WebRequest. Los inputs
+//   UseLocalAI/AIShadowMode/etc. descritos en EA/ASTUR_AI_SETUP.md no
+//   existen en este archivo hasta que se implemente esa integracion.
 // - Ninguna mejora de este archivo esta validada con backtesting real: hay
 //   que probarla en Strategy Tester (idealmente walk-forward) y despues en
 //   una cuenta DEMO separada antes de considerar una cuenta real.
@@ -103,11 +109,11 @@ input int    NewsReloadMinutes      = 60;
 input bool   UseDiagnosticsLog      = true;
 input string DiagnosticsFileName    = "ASTUR_Diagnostics.csv";
 
-datetime g_lastBarTime    = 0;
-string   g_statePrefix    = "";
-string   g_status         = "Inicializando";
+datetime g_lastBarTime      = 0;
+string   g_statePrefix      = "";
+string   g_status           = "Inicializando";
 bool     g_riskStopAnnounced = false;
-int      g_lastKnownTicket   = 0;
+string   g_lastKnownOrderKey = "";
 
 struct AsturNewsEvent
   {
@@ -168,7 +174,7 @@ int OnInit()
       g_status = "Listo; esperando una senal cerrada";
 
    UpdateDashboard();
-   Print("ASTUR Safe EA v0.3 iniciado. Cuenta=", AccountNumber(),
+   Print("ASTUR Safe EA v0.32 iniciado. Cuenta=", AccountNumber(),
          ", modo=", (IsDemo() ? "DEMO" : "REAL"),
          ", simbolo=", Symbol(), ", periodo=M15");
    return(INIT_SUCCEEDED);
@@ -251,9 +257,11 @@ void OnTick()
      {
       ExecuteSignal(ctx.finalSignal, ticket, lots, sl, tp);
       tradeResult = (ticket > 0 ? "ABIERTO" : "FALLIDO");
+      if(ticket <= 0)
+         blockReason = g_status;
      }
 
-   LogSignalDiagnostic(ctx, (canTrade ? "" : blockReason), tradeResult, ticket, lots, sl, tp);
+   LogSignalDiagnostic(ctx, blockReason, tradeResult, ticket, lots, sl, tp);
    UpdateDashboard();
   }
 
@@ -498,8 +506,13 @@ bool CanOpenNewTrade(string &reason)
      }
 
    RefreshRates();
-   double spreadPips = (Ask - Bid) / PipSize();
-   if(spreadPips > MaxSpreadPips)
+   int    spreadPoints = CurrentSpreadPoints();
+   double spreadPips   = SpreadPointsToPips(spreadPoints);
+
+   // MODE_SPREAD se expresa en puntos enteros. Compararlo en puntos evita
+   // que 1.50 pips termine representado internamente como 1.500000000... y
+   // sea rechazado por error cuando el limite tambien es 1.50.
+   if(spreadPoints > PipsToPoints(MaxSpreadPips))
      {
       reason = "spread alto: " + DoubleToString(spreadPips, 2) + " pips";
       return(false);
@@ -636,8 +649,9 @@ void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &ou
 
    RefreshRates();
 
-   double spreadPips = (Ask - Bid) / PipSize();
-   if(spreadPips > MaxSpreadPips)
+   int    spreadPoints = CurrentSpreadPoints();
+   double spreadPips   = SpreadPointsToPips(spreadPoints);
+   if(spreadPoints > PipsToPoints(MaxSpreadPips))
      {
       g_status = "Orden cancelada: el spread cambio a " +
                  DoubleToString(spreadPips, 2) + " pips";
@@ -654,10 +668,12 @@ void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &ou
    // Filtro de coste de transaccion: si el spread actual pesa demasiado
    // sobre el SL planeado, la esperanza matematica se deteriora aunque la
    // senal sea correcta. Mejor no operar que pagar un coste desproporcionado.
-   if((Ask - Bid) > stopDistance * MaxSpreadToSLRatio)
+   double spreadPrice = spreadPoints * Point;
+   double spreadToSL  = (stopDistance > 0.0 ? spreadPrice / stopDistance : 1.0);
+   if(spreadToSL > MaxSpreadToSLRatio + 1.0e-8)
      {
       g_status = "Orden cancelada: spread demasiado alto respecto al SL (" +
-                 DoubleToString((Ask - Bid) / stopDistance * 100.0, 1) + "% del riesgo)";
+                 DoubleToString(spreadToSL * 100.0, 1) + "% del riesgo)";
       return;
      }
 
@@ -690,7 +706,7 @@ void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &ou
 
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, lots, entry, slippagePoints,
-                          stopLoss, takeProfit, "ASTUR_SAFE_V0.3",
+                          stopLoss, takeProfit, "ASTUR_SAFE_V0.32",
                           MagicNumber, 0, arrowColor);
 
    if(ticket < 0)
@@ -711,9 +727,14 @@ void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &ou
       return;
      }
 
-   // Riesgo inicial (R) persistido por ticket: base para el cierre parcial.
-   GlobalVariableSet(g_statePrefix + "RISK_" + IntegerToString(ticket), stopDistance);
-   GlobalVariableSet(g_statePrefix + "PARTIAL_" + IntegerToString(ticket), 0);
+   // Clave de estado basada en la HORA DE APERTURA, no en el ticket: algunos
+   // brokers reasignan el numero de ticket al ejecutar un cierre parcial,
+   // pero la hora de apertura de la operacion no cambia. Usarla como clave
+   // garantiza que el cierre parcial (ver ManageOpenPosition) se ejecute
+   // como mucho una vez por operacion, pase lo que pase con el ticket.
+   string orderKey = IntegerToString((int)OrderOpenTime());
+   GlobalVariableSet(g_statePrefix + "RISK_" + orderKey, stopDistance);
+   GlobalVariableSet(g_statePrefix + "PARTIAL_" + orderKey, 0);
 
    outTicket = ticket;
    outLots   = lots;
@@ -765,11 +786,16 @@ double CalculateRiskLots(const double entry, const double stopLoss)
 //| Gestion de la (unica) posicion abierta en cada tick:               |
 //| cierre parcial por R, luego breakeven / trailing por ATR en vivo. |
 //| El SL solo se mueve para reducir riesgo, nunca para aumentarlo.   |
+//| El estado de "cierre parcial ya hecho" se indexa por la hora de   |
+//| apertura de la operacion, no por el ticket (ver ExecuteSignal),   |
+//| y tras un cierre parcial se relocaliza la orden por posicion en   |
+//| vez de asumir que el ticket sigue siendo el mismo.                |
 //+------------------------------------------------------------------+
 void ManageOpenPosition()
   {
-   int openTicket = 0;
-   int openType   = -1;
+   int      openTicket    = 0;
+   int      openType      = -1;
+   datetime openTimeFound = 0;
 
    for(int pos = OrdersTotal() - 1; pos >= 0; pos--)
      {
@@ -780,26 +806,26 @@ void ManageOpenPosition()
       int type = OrderType();
       if(type != OP_BUY && type != OP_SELL)
          continue;
-      openTicket = OrderTicket();
-      openType   = type;
+      openTicket    = OrderTicket();
+      openType      = type;
+      openTimeFound = OrderOpenTime();
       break; // el EA nunca mantiene mas de una operacion a la vez
      }
 
    if(openTicket == 0)
      {
-      if(g_lastKnownTicket != 0)
+      if(g_lastKnownOrderKey != "")
         {
-         CleanupOrderState(g_lastKnownTicket);
-         g_lastKnownTicket = 0;
+         CleanupOrderState(g_lastKnownOrderKey);
+         g_lastKnownOrderKey = "";
         }
       return;
      }
-   g_lastKnownTicket = openTicket;
+
+   string orderKey = IntegerToString((int)openTimeFound);
+   g_lastKnownOrderKey = orderKey;
 
    if(!UseBreakEven && !UseTrailingStop && !UsePartialClose)
-      return;
-
-   if(!OrderSelect(openTicket, SELECT_BY_TICKET))
       return;
 
    double atr = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
@@ -812,11 +838,13 @@ void ManageOpenPosition()
    double currentSL = OrderStopLoss();
    double lots      = OrderLots();
 
-   string riskVarName    = g_statePrefix + "RISK_" + IntegerToString(openTicket);
-   string partialVarName = g_statePrefix + "PARTIAL_" + IntegerToString(openTicket);
+   string riskVarName    = g_statePrefix + "RISK_" + orderKey;
+   string partialVarName = g_statePrefix + "PARTIAL_" + orderKey;
    double initialRisk = GlobalVariableCheck(riskVarName) ? GlobalVariableGet(riskVarName) : 0.0;
    if(initialRisk <= 0.0)
       initialRisk = MathAbs(openPrice - currentSL); // respaldo si el estado no esta disponible
+
+   bool partialCloseAttempted = false;
 
    if(UsePartialClose && initialRisk > 0.0 &&
       (!GlobalVariableCheck(partialVarName) || GlobalVariableGet(partialVarName) < 1.0))
@@ -838,6 +866,7 @@ void ManageOpenPosition()
 
          if(closeLots >= minLot && (fullClose || remainder >= minLot))
            {
+            partialCloseAttempted = true;
             double closePrice = (openType == OP_BUY ? Bid : Ask);
             ResetLastError();
             if(OrderClose(openTicket, closeLots, closePrice, PipsToPoints(MaxSlippagePips), clrLime))
@@ -855,10 +884,35 @@ void ManageOpenPosition()
         }
      }
 
-   // El cierre parcial puede haber modificado la orden (o cerrado del todo);
-   // releer antes de aplicar breakeven/trailing.
-   if(!OrderSelect(openTicket, SELECT_BY_TICKET))
-      return;
+   // Si se intento un cierre parcial, el ticket pudo haber cambiado (segun
+   // el broker) o la orden pudo cerrarse del todo: relocalizar por posicion
+   // (magic+simbolo), no confiar en que "openTicket" siga siendo valido.
+   if(partialCloseAttempted)
+     {
+      bool stillOpen = false;
+      for(int pos2 = OrdersTotal() - 1; pos2 >= 0; pos2--)
+        {
+         if(!OrderSelect(pos2, SELECT_BY_POS, MODE_TRADES))
+            continue;
+         if(OrderMagicNumber() != MagicNumber || OrderSymbol() != Symbol())
+            continue;
+         int type2 = OrderType();
+         if(type2 != OP_BUY && type2 != OP_SELL)
+            continue;
+         stillOpen  = true;
+         openTicket = OrderTicket();
+         openType   = type2;
+         break;
+        }
+
+      if(!stillOpen)
+         return; // el cierre parcial fue en realidad un cierre total
+     }
+   else
+     {
+      if(!OrderSelect(openTicket, SELECT_BY_TICKET))
+         return;
+     }
 
    currentSL = OrderStopLoss();
    double takeProfit = OrderTakeProfit();
@@ -910,12 +964,12 @@ void ManageOpenPosition()
             ", nuevoSL=", DoubleToString(candidateSL, Digits));
   }
 
-void CleanupOrderState(const int ticket)
+void CleanupOrderState(const string orderKey)
   {
-   if(ticket == 0)
+   if(orderKey == "")
       return;
-   GlobalVariableDel(g_statePrefix + "RISK_" + IntegerToString(ticket));
-   GlobalVariableDel(g_statePrefix + "PARTIAL_" + IntegerToString(ticket));
+   GlobalVariableDel(g_statePrefix + "RISK_" + orderKey);
+   GlobalVariableDel(g_statePrefix + "PARTIAL_" + orderKey);
   }
 
 //+------------------------------------------------------------------+
@@ -1115,7 +1169,7 @@ void LogSignalDiagnostic(const AsturSignalContext &ctx, const string blockReason
       return;
 
    RefreshRates();
-   double spreadPips = (PipSize() > 0.0 ? (Ask - Bid) / PipSize() : 0.0);
+   double spreadPips = SpreadPointsToPips(CurrentSpreadPoints());
 
    string cruceStr = (ctx.crossDirection > 0 ? "ALCISTA" : (ctx.crossDirection < 0 ? "BAJISTA" : "NINGUNO"));
    string senalStr  = (ctx.finalSignal > 0 ? "BUY" : (ctx.finalSignal < 0 ? "SELL" : "NONE"));
@@ -1190,6 +1244,18 @@ int PipsToPoints(const double pips)
    return((int)MathRound(pips * factor));
   }
 
+int CurrentSpreadPoints()
+  {
+   // MODE_SPREAD devuelve el spread actual en puntos del simbolo.
+   return((int)MathMax(0.0, MathRound(MarketInfo(Symbol(), MODE_SPREAD))));
+  }
+
+double SpreadPointsToPips(const int spreadPoints)
+  {
+   double factor = (Digits == 3 || Digits == 5) ? 10.0 : 1.0;
+   return(spreadPoints / factor);
+  }
+
 int LotDigits()
   {
    double step = MarketInfo(Symbol(), MODE_LOTSTEP);
@@ -1213,9 +1279,7 @@ double CurrentDrawdownPct()
 void UpdateDashboard()
   {
    RefreshRates();
-   double spreadPips = 0.0;
-   if(PipSize() > 0.0)
-      spreadPips = (Ask - Bid) / PipSize();
+   double spreadPips = SpreadPointsToPips(CurrentSpreadPoints());
 
    string newsLine = "Noticias: inactivo";
    if(UseNewsFilter)
@@ -1225,7 +1289,7 @@ void UpdateDashboard()
 
    string diagLine = UseDiagnosticsLog ? "Diagnostico: activo (" + DiagnosticsFileName + ")" : "Diagnostico: inactivo";
 
-   Comment("ASTUR Safe EA v0.3\n",
+   Comment("ASTUR Safe EA v0.32\n",
            "Modo: ", (IsDemo() ? "DEMO" : "REAL"),
            " | Real permitido: ", (AllowRealAccount ? "SI" : "NO"), "\n",
            "Cuenta: ", AccountNumber(), " | ", Symbol(), " M15\n",

@@ -1,4 +1,4 @@
-# ASTUR Safe EA (v0.3) — EURUSD M15, MetaTrader 4
+# ASTUR Safe EA (v0.32) — EURUSD M15, MetaTrader 4
 
 ## Antes de leer nada más: lo que este EA NO es
 
@@ -79,6 +79,35 @@ Tester antes de confiar en ello.
    que tú puedas analizarlo en Excel/Python para ver qué filtros realmente
    aportan y cuáles solo recortan operaciones sin mejorar el resultado —
    en vez de que se decida por intuición.
+
+## Qué cambió en v0.31 / v0.32
+
+- **v0.31**: el spread se compara en puntos enteros (`MODE_SPREAD`) en vez
+  de pips como `double`, evitando falsos rechazos por redondeo de coma
+  flotante. El log de diagnóstico ahora también registra el motivo cuando
+  `ExecuteSignal` cancela una orden (antes ese caso quedaba sin explicar).
+- **v0.32**: el cierre parcial (`UsePartialClose`) ahora indexa su estado
+  ("¿ya se hizo el cierre parcial de esta operación?") por la **hora de
+  apertura de la operación**, no por el número de ticket. Si el bróker
+  reasigna el ticket al ejecutar un cierre parcial, la v0.3/v0.31 podían
+  malinterpretarlo como una operación nueva y repetir el cierre parcial en
+  cada tick siguiente hasta agotar el lote. v0.32 relocaliza la orden por
+  posición (magic number + símbolo) después de cada intento de cierre
+  parcial en vez de asumir que el ticket no cambió.
+
+## IA local: solo diseño por ahora, no implementada en el EA
+
+Esta carpeta incluye `astur_ai_bridge.py` (un servidor HTTP local que
+consulta un modelo en Ollama/LM Studio y guarda memoria en SQLite) y
+`ASTUR_AI_SETUP.md` (el diseño de cómo se conectaría con el EA: modo
+sombra, acciones limitadas ALLOW/BLOCK/HOLD/PROTECT/CLOSE, etc.).
+
+**`ASTUR_SafeEA.mq4` todavía no llama a ese puente.** No hay inputs
+`UseLocalAI`/`AIShadowMode`, ninguna llamada `WebRequest`, ni escritura de
+`ASTUR_AI_Decisions.csv`/`ASTUR_TradeOutcomes.csv`. El puente funciona por
+sí solo (se puede arrancar y probar con `/health`), pero la integración del
+lado MQL4 es trabajo pendiente — ver `ASTUR_AI_SETUP.md` para el diseño
+previsto antes de construirla.
 
 ## Limitación honesta del filtro de noticias
 
