@@ -5,14 +5,16 @@ No abre operaciones ni toca MetaTrader directamente. Recibe contexto del EA,
 consulta un modelo local (Ollama o una API compatible con OpenAI), valida la
 respuesta y devuelve una accion dentro de una lista cerrada.
 
-ESTADO: este servicio es independiente y funciona por si solo (health check,
-almacenamiento en SQLite, llamada al modelo). Pero, a fecha de hoy,
-ASTUR_SafeEA.mq4 todavia NO le hace ninguna llamada WebRequest: no hay
-integracion MQL4<->bridge implementada todavia. Ver EA/ASTUR_AI_SETUP.md.
+ESTADO: ASTUR_SafeEA.mq4 (desde v0.40) ya llama a este puente via
+WebRequest cuando UseLocalAI=true. Todas las rutas (incluida /health)
+exigen el token compartido ASTUR_AI_SECRET si esta configurado: sin el
+token correcto, cualquier peticion recibe 401. Configuralo SIEMPRE antes
+de exponer este servicio, aunque solo escuche en localhost.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sqlite3
@@ -32,6 +34,7 @@ MODEL = os.getenv("ASTUR_AI_MODEL", "qwen2.5:7b").strip()
 MODEL_TIMEOUT = float(os.getenv("ASTUR_AI_MODEL_TIMEOUT", "25"))
 DATABASE = Path(os.getenv("ASTUR_AI_DATABASE", "astur_ai_memory.sqlite3"))
 MIN_MEMORY = int(os.getenv("ASTUR_AI_MIN_MEMORY", "30"))
+SHARED_SECRET = os.getenv("ASTUR_AI_SECRET", "").strip()
 
 if PROVIDER == "ollama":
     MODEL_URL = os.getenv("ASTUR_AI_URL", "http://127.0.0.1:11434/api/chat")
@@ -261,8 +264,21 @@ def save_outcome(payload: dict[str, Any]) -> None:
             connection.close()
 
 
+def is_authorized(headers: Any) -> bool:
+    """Autoriza la peticion contra el token compartido.
+
+    Sin ASTUR_AI_SECRET configurado, el servicio queda abierto a cualquier
+    proceso que alcance el puerto (solo aceptable en pruebas locales muy
+    controladas). hmac.compare_digest evita filtrar el token por timing.
+    """
+    if not SHARED_SECRET:
+        return True
+    provided = headers.get("X-ASTUR-Token", "")
+    return hmac.compare_digest(provided, SHARED_SECRET)
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ASTUR-AI/0.32"
+    server_version = "ASTUR-AI/0.40"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print("[%s] %s" % (self.log_date_time_string(), fmt % args), flush=True)
@@ -276,6 +292,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:  # noqa: N802
+        if not is_authorized(self.headers):
+            self.send_text(401, "no autorizado")
+            return
         if self.path == "/health":
             self.send_text(
                 200,
@@ -295,6 +314,9 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def do_POST(self) -> None:  # noqa: N802
+        if not is_authorized(self.headers):
+            self.send_text(401, "no autorizado")
+            return
         try:
             payload = self.read_payload()
             if self.path == "/outcome":
@@ -324,10 +346,25 @@ def main() -> None:
     with DB_LOCK:
         connection = db_connect()
         connection.close()
+    if not SHARED_SECRET:
+        print(
+            "ADVERTENCIA: ASTUR_AI_SECRET no esta configurado. Cualquier "
+            "proceso que alcance este puerto podria usar el puente. "
+            "Configura ASTUR_AI_SECRET antes de activar UseLocalAI en el EA.",
+            flush=True,
+        )
+    if HOST not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            f"ADVERTENCIA: ASTUR_AI_HOST={HOST} no es loopback. Este servicio "
+            "quedara alcanzable desde fuera de esta maquina; asegurate de que "
+            "ASTUR_AI_SECRET este configurado y de que el firewall lo proteja.",
+            flush=True,
+        )
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(
         f"ASTUR AI bridge escuchando en http://{HOST}:{PORT} "
-        f"(provider={PROVIDER}, model={MODEL})",
+        f"(provider={PROVIDER}, model={MODEL}, "
+        f"auth={'activada' if SHARED_SECRET else 'DESACTIVADA'})",
         flush=True,
     )
     try:

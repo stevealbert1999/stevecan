@@ -1,0 +1,17 @@
+# Secretos: nunca deben llegar al repositorio
+.env
+*.secret
+
+# Datos runtime del EA (personales, generados en MQL4/Files o Tester/Files)
+ASTUR_News.csv
+ASTUR_Diagnostics.csv
+ASTUR_AI_Decisions.csv
+ASTUR_TradeOutcomes.csv
+
+# Memoria del puente de IA
+astur_ai_memory.sqlite3
+astur_ai_memory.sqlite3-*
+
+# Artefactos de Python
+__pycache__/
+*.pyc

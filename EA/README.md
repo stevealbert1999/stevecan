@@ -1,4 +1,4 @@
-# ASTUR Safe EA (v0.32) — EURUSD M15, MetaTrader 4
+# ASTUR Safe EA (v0.40) — EURUSD M15, MetaTrader 4
 
 ## Antes de leer nada más: lo que este EA NO es
 
@@ -95,19 +95,29 @@ Tester antes de confiar en ello.
   posición (magic number + símbolo) después de cada intento de cierre
   parcial en vez de asumir que el ticket no cambió.
 
-## IA local: solo diseño por ahora, no implementada en el EA
+## Qué cambió en v0.40: integración real con IA local (opcional)
 
-Esta carpeta incluye `astur_ai_bridge.py` (un servidor HTTP local que
-consulta un modelo en Ollama/LM Studio y guarda memoria en SQLite) y
-`ASTUR_AI_SETUP.md` (el diseño de cómo se conectaría con el EA: modo
-sombra, acciones limitadas ALLOW/BLOCK/HOLD/PROTECT/CLOSE, etc.).
+`ASTUR_SafeEA.mq4` ahora sí llama al puente (`astur_ai_bridge.py`) vía
+`WebRequest`, pero **apagada por defecto** (`UseLocalAI=false`) y, al
+activarla, en **modo sombra** (`AIShadowMode=true`: solo observa, nunca
+actúa). La IA no puede abrir operaciones, aumentar el lote ni retirar el
+SL; como mucho veta una entrada ya validada (`BLOCK`), acerca el SL con una
+fórmula ATR fija (`PROTECT`, desactivado por defecto) o cierra antes de
+tiempo (`CLOSE`, desactivado por defecto). Detalle completo, incluyendo
+cómo arrancar el puente y configurar el EA paso a paso, en
+[`ASTUR_AI_SETUP.md`](./ASTUR_AI_SETUP.md).
 
-**`ASTUR_SafeEA.mq4` todavía no llama a ese puente.** No hay inputs
-`UseLocalAI`/`AIShadowMode`, ninguna llamada `WebRequest`, ni escritura de
-`ASTUR_AI_Decisions.csv`/`ASTUR_TradeOutcomes.csv`. El puente funciona por
-sí solo (se puede arrancar y probar con `/health`), pero la integración del
-lado MQL4 es trabajo pendiente — ver `ASTUR_AI_SETUP.md` para el diseño
-previsto antes de construirla.
+**Seguridad: solo tú puedes usar el puente.** Todas las rutas exigen un
+token compartido (`AISharedSecret` en el EA = `ASTUR_AI_SECRET` en el
+puente); sin él, el EA ni siquiera arranca con `UseLocalAI=true`, y el
+puente responde `401` a cualquier petición sin el token correcto. El
+puente sigue escuchando solo en `127.0.0.1` por defecto (protección de
+red de base; el token es una segunda capa). `.gitignore` excluye secretos
+(`.env`, `*.secret`) y datos personales generados en tiempo de ejecución
+(la base SQLite de memoria, los CSV de diagnóstico/decisiones/resultados)
+para que nada de eso llegue nunca al repositorio. Ver la sección
+"Seguridad y separación" en `ASTUR_AI_SETUP.md` para el razonamiento
+completo (incluyendo por qué no se añadió TLS sobre loopback).
 
 ## Limitación honesta del filtro de noticias
 

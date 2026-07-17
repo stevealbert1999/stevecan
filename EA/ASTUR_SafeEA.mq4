@@ -1,11 +1,11 @@
 #property strict
-#property version   "0.32"
+#property version   "0.40"
 #property description "ASTUR Safe EA: prototipo demo-first para EURUSD M15"
 #property description "Sin martingala, grid ni promedios. SL obligatorio y riesgo limitado."
 #property description "v0.2: gestion de posicion por tick (breakeven/trailing), filtros de senal reforzados y filtro de noticias opcional via CSV."
 #property description "v0.3: cierre parcial por R, entrada por puntuacion de confluencia, filtro de coste spread/SL y log de diagnostico en CSV."
-#property description "v0.31: comparacion robusta del spread en puntos y diagnostico de cancelaciones de ejecucion."
-#property description "v0.32: cierre parcial ligado a la hora de apertura de la operacion (a prueba de cambio de ticket), NO integracion de IA todavia."
+#property description "v0.31/v0.32: comparacion robusta del spread en puntos y cierre parcial ligado a la hora de apertura (a prueba de cambio de ticket)."
+#property description "v0.40: integracion real con el puente de IA local (veto/gestion/reporte), apagada y en modo sombra por defecto, autenticada por token."
 
 // IMPORTANTE (leer antes de usar):
 // - Ningun EA, por bueno que sea, puede garantizar ganancias ni evitar todas
@@ -17,22 +17,35 @@
 // - MetaTrader 4 NO es una plataforma de alta frecuencia (HFT). OnTick() se
 //   ejecuta con cada tick que el broker envia (tipicamente decenas a
 //   cientos de milisegundos de latencia, a veces mas), sin ejecucion
-//   co-localizada ni acceso a microestructura del order book. La gestion de
-//   posicion (breakeven/trailing/cierre parcial) reacciona a cada tick
-//   recibido, que es lo mas "en vivo" que esta plataforma permite.
+//   co-localizada ni acceso a microestructura del order book. Ademas,
+//   WebRequest() (usado por la integracion de IA) es una llamada
+//   SINCRONA/bloqueante: mientras espera respuesta del puente, el EA (y en
+//   la practica la terminal) se queda parado hasta AITimeoutMs. Por eso las
+//   consultas de gestion a la IA estan limitadas a una vez cada
+//   AIManageIntervalSeconds, no en cada tick.
 // - AllowRealAccount=false bloquea cuentas reales por defecto.
 // - El filtro de noticias (UseNewsFilter) NO descarga nada de internet: lee
 //   un CSV local (MQL4/Files/<NewsFileName>) que el usuario debe mantener
 //   actualizado manualmente o mediante un proceso externo. Si se activa y
 //   el archivo falta o no se puede leer, el EA bloquea nuevas entradas por
 //   seguridad (fail-safe), nunca al reves. Ver EA/README.md para el formato.
-// - El puente de IA (EA/astur_ai_bridge.py) es un servicio aparte: este
-//   .mq4 TODAVIA no le hace ninguna llamada WebRequest. Los inputs
-//   UseLocalAI/AIShadowMode/etc. descritos en EA/ASTUR_AI_SETUP.md no
-//   existen en este archivo hasta que se implemente esa integracion.
+// - La integracion con el puente de IA local (EA/astur_ai_bridge.py) esta
+//   implementada (UseLocalAI, AIShadowMode, WebRequest a /decision y
+//   /outcome). Viene APAGADA (UseLocalAI=false) y, al activarla, arranca en
+//   modo sombra (AIShadowMode=true): la IA solo analiza y registra, nunca
+//   actua, hasta que se cambie explicitamente. La IA NUNCA puede abrir una
+//   operacion, aumentar el lote ni retirar/alejar el SL; como mucho puede
+//   vetar una entrada ya validada (BLOCK), acercar el SL con una formula
+//   ATR fija (PROTECT, desactivado por defecto) o cerrar antes de tiempo
+//   (CLOSE, desactivado por defecto). Con UseLocalAI=true es OBLIGATORIO
+//   configurar AISharedSecret (debe coincidir con ASTUR_AI_SECRET del
+//   puente) o el EA rechaza arrancar: sin ese token, cualquier proceso que
+//   alcance el puerto del puente podria usarlo. Ver EA/ASTUR_AI_SETUP.md.
 // - Ninguna mejora de este archivo esta validada con backtesting real: hay
 //   que probarla en Strategy Tester (idealmente walk-forward) y despues en
 //   una cuenta DEMO separada antes de considerar una cuenta real.
+//   WebRequest() no funciona dentro del Strategy Tester, asi que la parte
+//   de IA solo se puede probar en grafico real (demo primero).
 
 input bool   AllowRealAccount       = false;
 input bool   ResetRiskBaselines     = false;
@@ -109,11 +122,33 @@ input int    NewsReloadMinutes      = 60;
 input bool   UseDiagnosticsLog      = true;
 input string DiagnosticsFileName    = "ASTUR_Diagnostics.csv";
 
-datetime g_lastBarTime      = 0;
-string   g_statePrefix      = "";
-string   g_status           = "Inicializando";
+// Integracion opcional con IA local (ver EA/ASTUR_AI_SETUP.md). Apagada por
+// defecto; si se activa, arranca en modo sombra (solo observa). La IA nunca
+// abre operaciones, nunca aumenta el lote, nunca retira ni aleja el SL.
+// Requiere un token compartido (AISharedSecret) identico al ASTUR_AI_SECRET
+// configurado en astur_ai_bridge.py: sin eso, el EA no arranca con
+// UseLocalAI=true (para que SOLO tu, con el token, puedas usar el puente).
+input bool   UseLocalAI              = false;
+input bool   AIShadowMode            = true;
+input bool   AIAllowEntryVeto        = true;
+input bool   AIAllowProtectiveStop   = false;
+input bool   AIAllowEarlyClose       = false;
+input bool   AIFailClosed            = true;
+input string AIBridgeURL             = "http://127.0.0.1:8765";
+input string AISharedSecret          = "";
+input int    AITimeoutMs             = 8000;
+input int    AIManageIntervalSeconds = 60;
+input double AIMinConfidence         = 0.55;
+input double AIProtectATRMultiple    = 0.50;
+input string AIDecisionsFileName     = "ASTUR_AI_Decisions.csv";
+input string AIOutcomesFileName      = "ASTUR_TradeOutcomes.csv";
+
+datetime g_lastBarTime       = 0;
+string   g_statePrefix       = "";
+string   g_status            = "Inicializando";
 bool     g_riskStopAnnounced = false;
 string   g_lastKnownOrderKey = "";
+datetime g_lastAIManageQuery = 0;
 
 struct AsturNewsEvent
   {
@@ -174,9 +209,10 @@ int OnInit()
       g_status = "Listo; esperando una senal cerrada";
 
    UpdateDashboard();
-   Print("ASTUR Safe EA v0.32 iniciado. Cuenta=", AccountNumber(),
+   Print("ASTUR Safe EA v0.40 iniciado. Cuenta=", AccountNumber(),
          ", modo=", (IsDemo() ? "DEMO" : "REAL"),
-         ", simbolo=", Symbol(), ", periodo=M15");
+         ", simbolo=", Symbol(), ", periodo=M15",
+         ", IA=", (UseLocalAI ? (AIShadowMode ? "sombra" : "activa") : "apagada"));
    return(INIT_SUCCEEDED);
   }
 
@@ -221,8 +257,8 @@ void OnTick()
    g_riskStopAnnounced = false;
 
    // Gestion de la posicion abierta en cada tick (breakeven / trailing /
-   // cierre parcial), no solo al cierre de vela: es la parte mas "en vivo"
-   // que MT4 permite.
+   // cierre parcial / consulta de gestion a la IA si esta activa), no solo
+   // al cierre de vela: es la parte mas "en vivo" que MT4 permite.
    ManageOpenPosition();
 
    MaybeReloadNews();
@@ -255,10 +291,19 @@ void OnTick()
      }
    else
      {
-      ExecuteSignal(ctx.finalSignal, ticket, lots, sl, tp);
-      tradeResult = (ticket > 0 ? "ABIERTO" : "FALLIDO");
-      if(ticket <= 0)
-         blockReason = g_status;
+      string aiVetoReason = "";
+      if(UseLocalAI && AIAllowEntryVeto && AIEntryVeto(ctx, aiVetoReason))
+        {
+         g_status = "Sin entrada (veto IA): " + aiVetoReason;
+         blockReason = "IA: " + aiVetoReason;
+        }
+      else
+        {
+         ExecuteSignal(ctx.finalSignal, ctx.confluenceScore, ticket, lots, sl, tp);
+         tradeResult = (ticket > 0 ? "ABIERTO" : "FALLIDO");
+         if(ticket <= 0)
+            blockReason = g_status;
+        }
      }
 
    LogSignalDiagnostic(ctx, blockReason, tradeResult, ticket, lots, sl, tp);
@@ -355,6 +400,47 @@ bool InputsAreValid()
      {
       Print("DiagnosticsFileName no puede estar vacio si UseDiagnosticsLog esta activo.");
       return(false);
+     }
+
+   if(UseLocalAI)
+     {
+      if(StringLen(AIBridgeURL) == 0)
+        {
+         Print("AIBridgeURL no puede estar vacio si UseLocalAI esta activo.");
+         return(false);
+        }
+
+      if(StringLen(AISharedSecret) == 0)
+        {
+         Print("AISharedSecret no puede estar vacio si UseLocalAI esta activo: sin un token compartido, ",
+               "cualquier proceso que alcance el puerto del puente podria usarlo. Genera un token largo y ",
+               "aleatorio, configuralo igual en el puente (variable de entorno ASTUR_AI_SECRET) y en este input.");
+         return(false);
+        }
+
+      if(AITimeoutMs <= 0 || AIManageIntervalSeconds <= 0)
+        {
+         Print("AITimeoutMs y AIManageIntervalSeconds deben ser > 0.");
+         return(false);
+        }
+
+      if(AIMinConfidence < 0.0 || AIMinConfidence > 1.0)
+        {
+         Print("AIMinConfidence debe estar entre 0 y 1.");
+         return(false);
+        }
+
+      if(AIAllowProtectiveStop && AIProtectATRMultiple <= 0.0)
+        {
+         Print("AIProtectATRMultiple debe ser > 0 si AIAllowProtectiveStop esta activo.");
+         return(false);
+        }
+
+      if(StringLen(AIDecisionsFileName) == 0 || StringLen(AIOutcomesFileName) == 0)
+        {
+         Print("AIDecisionsFileName y AIOutcomesFileName no pueden estar vacios si UseLocalAI esta activo.");
+         return(false);
+        }
      }
 
    return(true);
@@ -640,7 +726,8 @@ bool HigherTimeframeAligned(const int signal)
 //+------------------------------------------------------------------+
 //| Envio de orden con SL/TP desde el primer momento                  |
 //+------------------------------------------------------------------+
-void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &outSL, double &outTP)
+void ExecuteSignal(const int signal, const int confluenceScore,
+                    int &outTicket, double &outLots, double &outSL, double &outTP)
   {
    outTicket = 0;
    outLots   = 0.0;
@@ -706,7 +793,7 @@ void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &ou
 
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, lots, entry, slippagePoints,
-                          stopLoss, takeProfit, "ASTUR_SAFE_V0.32",
+                          stopLoss, takeProfit, "ASTUR_SAFE_V0.40",
                           MagicNumber, 0, arrowColor);
 
    if(ticket < 0)
@@ -735,6 +822,7 @@ void ExecuteSignal(const int signal, int &outTicket, double &outLots, double &ou
    string orderKey = IntegerToString((int)OrderOpenTime());
    GlobalVariableSet(g_statePrefix + "RISK_" + orderKey, stopDistance);
    GlobalVariableSet(g_statePrefix + "PARTIAL_" + orderKey, 0);
+   GlobalVariableSet(g_statePrefix + "SCORE_" + orderKey, confluenceScore);
 
    outTicket = ticket;
    outLots   = lots;
@@ -784,12 +872,13 @@ double CalculateRiskLots(const double entry, const double stopLoss)
 
 //+------------------------------------------------------------------+
 //| Gestion de la (unica) posicion abierta en cada tick:               |
-//| cierre parcial por R, luego breakeven / trailing por ATR en vivo. |
-//| El SL solo se mueve para reducir riesgo, nunca para aumentarlo.   |
-//| El estado de "cierre parcial ya hecho" se indexa por la hora de   |
-//| apertura de la operacion, no por el ticket (ver ExecuteSignal),   |
-//| y tras un cierre parcial se relocaliza la orden por posicion en   |
-//| vez de asumir que el ticket sigue siendo el mismo.                |
+//| cierre parcial por R, breakeven / trailing por ATR en vivo, y      |
+//| gestion adicional de la IA si esta activa (PROTECT/CLOSE).         |
+//| El SL solo se mueve para reducir riesgo, nunca para aumentarlo.    |
+//| El estado se indexa por la hora de apertura de la operacion, no    |
+//| por el ticket (ver ExecuteSignal), y tras un cierre parcial se     |
+//| relocaliza la orden por posicion en vez de asumir que el ticket    |
+//| sigue siendo el mismo.                                             |
 //+------------------------------------------------------------------+
 void ManageOpenPosition()
   {
@@ -816,16 +905,20 @@ void ManageOpenPosition()
      {
       if(g_lastKnownOrderKey != "")
         {
-         CleanupOrderState(g_lastKnownOrderKey);
+         ReportTradeOutcome(g_lastKnownOrderKey);
          g_lastKnownOrderKey = "";
         }
       return;
      }
 
    string orderKey = IntegerToString((int)openTimeFound);
-   g_lastKnownOrderKey = orderKey;
+   if(g_lastKnownOrderKey != orderKey)
+     {
+      g_lastKnownOrderKey = orderKey;
+      g_lastAIManageQuery = 0; // primera consulta de IA pronta para la operacion nueva
+     }
 
-   if(!UseBreakEven && !UseTrailingStop && !UsePartialClose)
+   if(!UseBreakEven && !UseTrailingStop && !UsePartialClose && !UseLocalAI)
       return;
 
    double atr = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
@@ -906,7 +999,7 @@ void ManageOpenPosition()
         }
 
       if(!stillOpen)
-         return; // el cierre parcial fue en realidad un cierre total
+         return; // el cierre parcial fue en realidad un cierre total; el outcome se reporta en el siguiente tick
      }
    else
      {
@@ -921,6 +1014,7 @@ void ManageOpenPosition()
    double minLockDist  = (MarketInfo(Symbol(), MODE_STOPLEVEL) + 2.0) * Point;
    double minStepPrice = MathMax(MinTrailingStepPips * PipSize(), Point);
    double candidateSL  = currentSL;
+   bool   deterministicModify = false;
 
    if(openType == OP_BUY)
      {
@@ -933,9 +1027,7 @@ void ManageOpenPosition()
          candidateSL = MathMax(candidateSL, Bid - TrailingStepATR * atr);
 
       candidateSL = MathMin(candidateSL, Bid - minLockDist);
-
-      if(candidateSL - currentSL < minStepPrice)
-         return;
+      deterministicModify = (candidateSL - currentSL >= minStepPrice);
      }
    else
      {
@@ -948,20 +1040,23 @@ void ManageOpenPosition()
          candidateSL = MathMin(candidateSL, Ask + TrailingStepATR * atr);
 
       candidateSL = MathMax(candidateSL, Ask + minLockDist);
-
-      if(currentSL - candidateSL < minStepPrice)
-         return;
+      deterministicModify = (currentSL - candidateSL >= minStepPrice);
      }
 
-   candidateSL = NormalizeDouble(candidateSL, Digits);
+   if(deterministicModify)
+     {
+      candidateSL = NormalizeDouble(candidateSL, Digits);
 
-   ResetLastError();
-   if(!OrderModify(openTicket, openPrice, candidateSL, takeProfit, 0, clrYellow))
-      Print("ASTUR Safe EA: OrderModify (breakeven/trailing) fallo ticket=", openTicket,
-            ". Error=", GetLastError());
-   else
-      Print("ASTUR Safe EA: SL protegido actualizado. ticket=", openTicket,
-            ", nuevoSL=", DoubleToString(candidateSL, Digits));
+      ResetLastError();
+      if(!OrderModify(openTicket, openPrice, candidateSL, takeProfit, 0, clrYellow))
+         Print("ASTUR Safe EA: OrderModify (breakeven/trailing) fallo ticket=", openTicket,
+               ". Error=", GetLastError());
+      else
+         Print("ASTUR Safe EA: SL protegido actualizado. ticket=", openTicket,
+               ", nuevoSL=", DoubleToString(candidateSL, Digits));
+     }
+
+   AIManageCheck(openTicket, openType, orderKey);
   }
 
 void CleanupOrderState(const string orderKey)
@@ -970,6 +1065,7 @@ void CleanupOrderState(const string orderKey)
       return;
    GlobalVariableDel(g_statePrefix + "RISK_" + orderKey);
    GlobalVariableDel(g_statePrefix + "PARTIAL_" + orderKey);
+   GlobalVariableDel(g_statePrefix + "SCORE_" + orderKey);
   }
 
 //+------------------------------------------------------------------+
@@ -1135,6 +1231,324 @@ bool NewsBlackoutActive(string &reason)
   }
 
 //+------------------------------------------------------------------+
+//| Integracion con IA local (opcional, apagada por defecto)          |
+//| La IA SOLO puede: vetar una entrada ya validada (BLOCK), acercar  |
+//| el SL con una formula ATR fija (PROTECT) o cerrar antes de tiempo |
+//| (CLOSE, desactivado por defecto). Nunca abre operaciones, nunca   |
+//| aumenta el lote, nunca retira ni aleja el SL. En AIShadowMode     |
+//| (por defecto) solo registra su opinion, nunca actua. Requiere     |
+//| AISharedSecret (token compartido con el puente) para funcionar.   |
+//+------------------------------------------------------------------+
+bool CallAIBridge(const string path, const string jsonBody, string &responseText)
+  {
+   responseText = "";
+   if(!UseLocalAI)
+      return(false);
+
+   string url     = AIBridgeURL + path;
+   string headers = "Content-Type: application/json\r\n";
+   if(StringLen(AISharedSecret) > 0)
+      headers += "X-ASTUR-Token: " + AISharedSecret + "\r\n";
+
+   uchar postData[];
+   int len = StringToCharArray(jsonBody, postData, 0, WHOLE_ARRAY, CP_UTF8) - 1;
+   if(len < 0)
+      len = 0;
+   ArrayResize(postData, len);
+
+   uchar  result[];
+   string resultHeaders;
+
+   ResetLastError();
+   int status = WebRequest("POST", url, headers, AITimeoutMs, postData, result, resultHeaders);
+
+   if(status == -1)
+     {
+      int err = GetLastError();
+      Print("ASTUR IA: WebRequest fallo. Error=", err,
+            err == 4060 ? (" (URL no autorizada; agregar " + AIBridgeURL +
+                            " en Herramientas > Opciones > Asesores Expertos)") : "");
+      return(false);
+     }
+
+   responseText = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+
+   if(status == 401)
+     {
+      Print("ASTUR IA: el puente rechazo la peticion (401 no autorizado). Revisa que AISharedSecret ",
+            "coincida exactamente con ASTUR_AI_SECRET configurado en astur_ai_bridge.py.");
+      return(false);
+     }
+
+   if(status != 200)
+     {
+      Print("ASTUR IA: respuesta HTTP ", status, ": ", responseText);
+      return(false);
+     }
+
+   return(true);
+  }
+
+bool ParseAIDecision(const string responseText, string &action, double &confidence, string &reason)
+  {
+   string parts[];
+   int n = StringSplit(responseText, '|', parts);
+   if(n < 3)
+     {
+      action     = "";
+      confidence = 0.0;
+      reason     = "respuesta invalida";
+      return(false);
+     }
+
+   action     = parts[0];
+   confidence = StringToDouble(parts[1]);
+   reason     = parts[2];
+   for(int i = 3; i < n; i++)
+      reason += "|" + parts[i];
+
+   return(true);
+  }
+
+void LogAIDecision(const string event, const int ticket, const string side, const int score,
+                    const string action, const double confidence, const string reason)
+  {
+   string line = TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "," +
+                 event + "," +
+                 IntegerToString(ticket) + "," +
+                 side + "," +
+                 IntegerToString(score) + "," +
+                 action + "," +
+                 DoubleToString(confidence, 4) + "," +
+                 CsvSafe(reason) + "," +
+                 (AIShadowMode ? "SOMBRA" : "ACTIVO");
+
+   AppendToCsv(AIDecisionsFileName,
+      "Timestamp,Evento,Ticket,Side,Score,Accion,Confianza,Motivo,Modo",
+      line);
+  }
+
+bool AIEntryVeto(const AsturSignalContext &ctx, string &reason)
+  {
+   reason = "";
+
+   string side = (ctx.finalSignal > 0 ? "BUY" : "SELL");
+   string json = "{" +
+                 "\"event\":\"ENTRY\"," +
+                 "\"side\":\"" + side + "\"," +
+                 "\"score\":" + IntegerToString(ctx.confluenceScore) + "," +
+                 "\"score_max\":" + IntegerToString(ctx.confluenceMax) + "," +
+                 "\"symbol\":\"" + Symbol() + "\"," +
+                 "\"close\":" + DoubleToString(ctx.close1, Digits) + "," +
+                 "\"adx\":" + DoubleToString(ctx.adx1, 2) + "," +
+                 "\"atr_pips\":" + DoubleToString(ctx.atrPips, 2) + "," +
+                 "\"htf_ok\":" + (ctx.htfOk ? "true" : "false") + "," +
+                 "\"trend_slope_ok\":" + (ctx.trendSlopeOk ? "true" : "false") + "," +
+                 "\"adx_slope_ok\":" + (ctx.adxSlopeOk ? "true" : "false") + "," +
+                 "\"spread_pips\":" + DoubleToString(SpreadPointsToPips(CurrentSpreadPoints()), 2) +
+                 "}";
+
+   string response;
+   bool ok = CallAIBridge("/decision", json, response);
+
+   if(!ok)
+     {
+      LogAIDecision("ENTRY", 0, side, ctx.confluenceScore, "SIN_RESPUESTA", 0.0, "bridge no disponible");
+      if(AIShadowMode)
+         return(false);
+      if(AIFailClosed)
+        {
+         reason = "IA sin respuesta (fail-closed)";
+         return(true);
+        }
+      return(false);
+     }
+
+   string action = "", decisionReason = "";
+   double confidence = 0.0;
+   ParseAIDecision(response, action, confidence, decisionReason);
+   LogAIDecision("ENTRY", 0, side, ctx.confluenceScore, action, confidence, decisionReason);
+
+   if(AIShadowMode)
+      return(false); // modo sombra: se registra el consejo, nunca actua
+
+   if(action == "BLOCK" && confidence >= AIMinConfidence)
+     {
+      reason = decisionReason;
+      return(true);
+     }
+
+   return(false);
+  }
+
+void ApplyAIProtect(const int ticket, const int type)
+  {
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return;
+
+   double atr = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
+   if(atr <= 0.0)
+      return;
+
+   RefreshRates();
+
+   double currentSL   = OrderStopLoss();
+   double openPrice   = OrderOpenPrice();
+   double takeProfit  = OrderTakeProfit();
+   double minLockDist = (MarketInfo(Symbol(), MODE_STOPLEVEL) + 2.0) * Point;
+   double candidateSL = currentSL;
+
+   if(type == OP_BUY)
+     {
+      candidateSL = MathMax(candidateSL, Bid - AIProtectATRMultiple * atr);
+      candidateSL = MathMin(candidateSL, Bid - minLockDist);
+      if(candidateSL <= currentSL)
+         return; // la IA solo puede acercar el SL, nunca alejarlo
+     }
+   else
+     {
+      candidateSL = MathMin(candidateSL, Ask + AIProtectATRMultiple * atr);
+      candidateSL = MathMax(candidateSL, Ask + minLockDist);
+      if(candidateSL >= currentSL)
+         return;
+     }
+
+   candidateSL = NormalizeDouble(candidateSL, Digits);
+
+   ResetLastError();
+   if(!OrderModify(ticket, openPrice, candidateSL, takeProfit, 0, clrOrange))
+      Print("ASTUR IA: PROTECT fallo ticket=", ticket, ". Error=", GetLastError());
+   else
+      Print("ASTUR IA: PROTECT aplicado. ticket=", ticket, ", nuevoSL=", DoubleToString(candidateSL, Digits));
+  }
+
+void AIManageCheck(const int ticket, const int type, const string orderKey)
+  {
+   if(!UseLocalAI)
+      return;
+   if(TimeCurrent() - g_lastAIManageQuery < AIManageIntervalSeconds)
+      return;
+   g_lastAIManageQuery = TimeCurrent();
+
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return;
+
+   double   openPrice = OrderOpenPrice();
+   datetime openTime  = OrderOpenTime();
+   double   atr       = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
+   if(atr <= 0.0)
+      return;
+
+   RefreshRates();
+
+   double riskValue = GlobalVariableCheck(g_statePrefix + "RISK_" + orderKey) ?
+                       GlobalVariableGet(g_statePrefix + "RISK_" + orderKey) : 0.0;
+   double profitPrice  = (type == OP_BUY ? Bid - openPrice : openPrice - Ask);
+   double profitR      = (riskValue > 0.0 ? profitPrice / riskValue : 0.0);
+   int    scoreAtEntry = GlobalVariableCheck(g_statePrefix + "SCORE_" + orderKey) ?
+                          (int)GlobalVariableGet(g_statePrefix + "SCORE_" + orderKey) : -1;
+   string side = (type == OP_BUY ? "BUY" : "SELL");
+
+   string json = "{" +
+                 "\"event\":\"MANAGE\"," +
+                 "\"ticket\":" + IntegerToString(ticket) + "," +
+                 "\"side\":\"" + side + "\"," +
+                 "\"score\":" + IntegerToString(scoreAtEntry) + "," +
+                 "\"profit_r\":" + DoubleToString(profitR, 2) + "," +
+                 "\"minutes_open\":" + IntegerToString((int)((TimeCurrent() - openTime) / 60)) + "," +
+                 "\"atr_pips\":" + DoubleToString(atr / PipSize(), 2) +
+                 "}";
+
+   string response;
+   bool ok = CallAIBridge("/decision", json, response);
+
+   if(!ok)
+     {
+      LogAIDecision("MANAGE", ticket, side, scoreAtEntry, "SIN_RESPUESTA", 0.0, "bridge no disponible");
+      return; // sin respuesta: nunca fuerza nada, solo se pierde esta capa extra
+     }
+
+   string action = "", reason = "";
+   double confidence = 0.0;
+   ParseAIDecision(response, action, confidence, reason);
+   LogAIDecision("MANAGE", ticket, side, scoreAtEntry, action, confidence, reason);
+
+   if(AIShadowMode)
+      return; // solo registra, nunca actua
+
+   if(confidence < AIMinConfidence)
+      return;
+
+   if(action == "PROTECT" && AIAllowProtectiveStop)
+      ApplyAIProtect(ticket, type);
+   else if(action == "CLOSE" && AIAllowEarlyClose)
+      CloseTicketImmediately(ticket);
+  }
+
+void ReportTradeOutcome(const string orderKey)
+  {
+   if(!UseLocalAI)
+     {
+      CleanupOrderState(orderKey);
+      return;
+     }
+
+   datetime targetOpenTime = (datetime)StringToInteger(orderKey);
+   double   totalProfit    = 0.0;
+   int      rootTicket     = 0;
+   string   side           = "";
+   bool     found          = false;
+
+   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+         continue;
+      if(OrderMagicNumber() != MagicNumber || OrderSymbol() != Symbol())
+         continue;
+      if(OrderOpenTime() != targetOpenTime)
+         continue;
+
+      int type = OrderType();
+      if(type != OP_BUY && type != OP_SELL)
+         continue;
+
+      totalProfit += OrderProfit() + OrderSwap() + OrderCommission();
+      if(!found)
+        {
+         rootTicket = OrderTicket();
+         side       = (type == OP_BUY ? "BUY" : "SELL");
+         found      = true;
+        }
+     }
+
+   if(found)
+     {
+      int    score  = GlobalVariableCheck(g_statePrefix + "SCORE_" + orderKey) ?
+                       (int)GlobalVariableGet(g_statePrefix + "SCORE_" + orderKey) : -1;
+      string result = (totalProfit >= 0.0 ? "WIN" : "LOSS");
+
+      string json = "{" +
+                    "\"root_ticket\":" + IntegerToString(rootTicket) + "," +
+                    "\"side\":\"" + side + "\"," +
+                    "\"score\":" + IntegerToString(score) + "," +
+                    "\"profit\":" + DoubleToString(totalProfit, 2) + "," +
+                    "\"result\":\"" + result + "\"" +
+                    "}";
+
+      string response;
+      CallAIBridge("/outcome", json, response);
+
+      AppendToCsv(AIOutcomesFileName,
+         "Timestamp,RootTicket,Side,Score,Profit,Resultado",
+         TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "," +
+         IntegerToString(rootTicket) + "," + side + "," + IntegerToString(score) + "," +
+         DoubleToString(totalProfit, 2) + "," + result);
+     }
+
+   CleanupOrderState(orderKey);
+  }
+
+//+------------------------------------------------------------------+
 //| Diagnostico: log CSV de cada senal evaluada (tomada o no)         |
 //+------------------------------------------------------------------+
 string CsvSafe(string text)
@@ -1289,7 +1703,13 @@ void UpdateDashboard()
 
    string diagLine = UseDiagnosticsLog ? "Diagnostico: activo (" + DiagnosticsFileName + ")" : "Diagnostico: inactivo";
 
-   Comment("ASTUR Safe EA v0.32\n",
+   string aiLine = "IA: desactivada";
+   if(UseLocalAI)
+      aiLine = AIShadowMode ?
+               "IA: activa en modo SOMBRA (solo observa)" :
+               "IA: ACTIVA (puede vetar/proteger/cerrar segun permisos)";
+
+   Comment("ASTUR Safe EA v0.40\n",
            "Modo: ", (IsDemo() ? "DEMO" : "REAL"),
            " | Real permitido: ", (AllowRealAccount ? "SI" : "NO"), "\n",
            "Cuenta: ", AccountNumber(), " | ", Symbol(), " M15\n",
@@ -1299,6 +1719,7 @@ void UpdateDashboard()
            "% | Spread: ", DoubleToString(spreadPips, 2), " pips\n",
            newsLine, "\n",
            diagLine, "\n",
+           aiLine, "\n",
            "Operaciones EA: ", CountEAOrders(), "\n",
            "Estado: ", g_status);
   }
