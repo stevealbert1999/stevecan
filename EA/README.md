@@ -1,4 +1,4 @@
-# ASTUR Safe EA (v0.40) — EURUSD M15, MetaTrader 4
+# ASTUR Safe EA (v0.41) — EURUSD M15, MetaTrader 4
 
 ## Antes de leer nada más: lo que este EA NO es
 
@@ -118,6 +118,20 @@ red de base; el token es una segunda capa). `.gitignore` excluye secretos
 para que nada de eso llegue nunca al repositorio. Ver la sección
 "Seguridad y separación" en `ASTUR_AI_SETUP.md` para el razonamiento
 completo (incluyendo por qué no se añadió TLS sobre loopback).
+
+## Qué cambió en v0.41: contexto de mercado en vivo para la IA
+
+Cada consulta a la IA (`ENTRY` o `MANAGE`) ahora incluye un snapshot
+recalculado en el momento — precio bid/ask, spread, EMAs, ADX/DI, ATR y
+la vela M15 aún en formación — más dos series de velas OHLC cerradas
+(`AIContextCandlesM15`, 20 por defecto; `AIContextCandlesHTF`, 10 por
+defecto, de la temporalidad superior) para que la IA razone sobre
+tendencia y estructura real del gráfico, no solo sobre un par de valores
+sueltos. Sigue siendo "en vivo" en el sentido de MT4: un snapshot fresco
+en cada consulta puntual, no un streaming continuo (`WebRequest` es
+bloqueante, por eso `MANAGE` se limita a una consulta cada
+`AIManageIntervalSeconds`). Detalle del formato JSON en la sección
+correspondiente de `ASTUR_AI_SETUP.md`.
 
 ## Limitación honesta del filtro de noticias
 

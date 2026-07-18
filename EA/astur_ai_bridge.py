@@ -127,10 +127,22 @@ def build_prompt(payload: dict[str, Any]) -> list[dict[str, str]]:
     summary = recent_performance_summary()
     system = (
         "Eres un revisor conservador de riesgo para EURUSD M15. "
+        "En 'market_context.market' recibes un snapshot EN VIVO recalculado en "
+        "el instante de esta consulta: precio bid/ask, spread, EMA rapida/lenta/"
+        "tendencia, ADX, DI+/DI-, ATR en pips, dia/hora, la vela M15 aun en "
+        "formacion ('current_bar_m15') y dos series de velas OHLC YA CERRADAS "
+        "en orden cronologico ascendente (la ultima del array es la mas "
+        "reciente): 'candles_m15' (temporalidad de la operacion) y "
+        "'candles_htf' (temporalidad superior de confirmacion). Usa esas "
+        "series para juzgar tendencia, momentum y estructura reciente del "
+        "grafico, no solo el ultimo valor de un indicador. "
         "No puedes abrir operaciones por tu cuenta, aumentar lotes, quitar el stop loss, "
-        "ampliar el riesgo ni prometer beneficios. El algoritmo determinista siempre manda. "
+        "ampliar el riesgo ni prometer beneficios. El algoritmo determinista siempre manda; "
+        "tu unico rol es vetar entradas dudosas o pedir mas prudencia en la gestion. "
         f"Para este evento solo puedes elegir una accion de {allowed}. "
-        "Si la evidencia es insuficiente, usa BLOCK para una entrada o HOLD para gestion. "
+        "Si la evidencia es insuficiente o las velas muestran una estructura "
+        "contradictoria (por ejemplo M15 y la temporalidad superior en "
+        "direcciones opuestas), usa BLOCK para una entrada o HOLD para gestion. "
         "Devuelve exclusivamente JSON valido con action, confidence entre 0 y 1 y reason breve."
     )
     user = json.dumps(

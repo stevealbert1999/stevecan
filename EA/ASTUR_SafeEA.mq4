@@ -1,11 +1,12 @@
 #property strict
-#property version   "0.40"
+#property version   "0.41"
 #property description "ASTUR Safe EA: prototipo demo-first para EURUSD M15"
 #property description "Sin martingala, grid ni promedios. SL obligatorio y riesgo limitado."
 #property description "v0.2: gestion de posicion por tick (breakeven/trailing), filtros de senal reforzados y filtro de noticias opcional via CSV."
 #property description "v0.3: cierre parcial por R, entrada por puntuacion de confluencia, filtro de coste spread/SL y log de diagnostico en CSV."
 #property description "v0.31/v0.32: comparacion robusta del spread en puntos y cierre parcial ligado a la hora de apertura (a prueba de cambio de ticket)."
 #property description "v0.40: integracion real con el puente de IA local (veto/gestion/reporte), apagada y en modo sombra por defecto, autenticada por token."
+#property description "v0.41: contexto de mercado en vivo para la IA (precio, indicadores recalculados y velas OHLC recientes M15/temporalidad superior en cada consulta)."
 
 // IMPORTANTE (leer antes de usar):
 // - Ningun EA, por bueno que sea, puede garantizar ganancias ni evitar todas
@@ -143,6 +144,14 @@ input double AIProtectATRMultiple    = 0.50;
 input string AIDecisionsFileName     = "ASTUR_AI_Decisions.csv";
 input string AIOutcomesFileName      = "ASTUR_TradeOutcomes.csv";
 
+// Contexto de mercado en vivo enviado a la IA en cada consulta: precio
+// actual, indicadores recalculados en el momento y series de velas OHLC
+// recientes (M15 y la temporalidad superior), para que la IA razone sobre
+// tendencia/momentum/estructura real del grafico, no solo sobre un par de
+// valores sueltos. 0 desactiva el envio de esa serie de velas.
+input int    AIContextCandlesM15     = 20;
+input int    AIContextCandlesHTF     = 10;
+
 datetime g_lastBarTime       = 0;
 string   g_statePrefix       = "";
 string   g_status            = "Inicializando";
@@ -209,7 +218,7 @@ int OnInit()
       g_status = "Listo; esperando una senal cerrada";
 
    UpdateDashboard();
-   Print("ASTUR Safe EA v0.40 iniciado. Cuenta=", AccountNumber(),
+   Print("ASTUR Safe EA v0.41 iniciado. Cuenta=", AccountNumber(),
          ", modo=", (IsDemo() ? "DEMO" : "REAL"),
          ", simbolo=", Symbol(), ", periodo=M15",
          ", IA=", (UseLocalAI ? (AIShadowMode ? "sombra" : "activa") : "apagada"));
@@ -439,6 +448,13 @@ bool InputsAreValid()
       if(StringLen(AIDecisionsFileName) == 0 || StringLen(AIOutcomesFileName) == 0)
         {
          Print("AIDecisionsFileName y AIOutcomesFileName no pueden estar vacios si UseLocalAI esta activo.");
+         return(false);
+        }
+
+      if(AIContextCandlesM15 < 0 || AIContextCandlesM15 > 200 ||
+         AIContextCandlesHTF < 0 || AIContextCandlesHTF > 200)
+        {
+         Print("AIContextCandlesM15 y AIContextCandlesHTF deben estar entre 0 y 200.");
          return(false);
         }
      }
@@ -793,7 +809,7 @@ void ExecuteSignal(const int signal, const int confluenceScore,
 
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, lots, entry, slippagePoints,
-                          stopLoss, takeProfit, "ASTUR_SAFE_V0.40",
+                          stopLoss, takeProfit, "ASTUR_SAFE_V0.41",
                           MagicNumber, 0, arrowColor);
 
    if(ticket < 0)
@@ -1328,6 +1344,83 @@ void LogAIDecision(const string event, const int ticket, const string side, cons
       line);
   }
 
+//+------------------------------------------------------------------+
+//| Serie de velas OHLC en JSON (de la mas antigua a la mas reciente,  |
+//| solo velas CERRADAS) para que la IA vea movimiento real reciente,  |
+//| no solo un indicador puntual.                                      |
+//+------------------------------------------------------------------+
+string BuildCandlesJson(const int timeframe, const int count)
+  {
+   if(count <= 0)
+      return("[]");
+
+   int available = iBars(NULL, timeframe);
+   int n = MathMin(count, available);
+   if(n <= 0)
+      return("[]");
+
+   string json = "[";
+   for(int i = n; i >= 1; i--)
+     {
+      if(i < n)
+         json += ",";
+      json += "{" +
+              "\"t\":\"" + TimeToString(iTime(NULL, timeframe, i), TIME_DATE | TIME_MINUTES) + "\"," +
+              "\"o\":" + DoubleToString(iOpen(NULL, timeframe, i), Digits) + "," +
+              "\"h\":" + DoubleToString(iHigh(NULL, timeframe, i), Digits) + "," +
+              "\"l\":" + DoubleToString(iLow(NULL, timeframe, i), Digits) + "," +
+              "\"c\":" + DoubleToString(iClose(NULL, timeframe, i), Digits) +
+              "}";
+     }
+   json += "]";
+   return(json);
+  }
+
+//+------------------------------------------------------------------+
+//| Snapshot de mercado EN VIVO (recalculado en el momento de cada     |
+//| consulta): precio actual, indicadores frescos y las series de      |
+//| velas M15/temporalidad superior. Se reutiliza tanto para ENTRY     |
+//| como para MANAGE, para que la IA siempre razone sobre datos         |
+//| actuales del grafico, no sobre lo que habia al abrir la operacion. |
+//+------------------------------------------------------------------+
+string BuildMarketSnapshotJson()
+  {
+   double fast1  = iMA(NULL, PERIOD_M15, FastEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+   double slow1  = iMA(NULL, PERIOD_M15, SlowEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+   double trend1 = iMA(NULL, PERIOD_M15, TrendEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 1);
+   double adx1   = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MAIN, 1);
+   double plus1  = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_PLUSDI, 1);
+   double minus1 = iADX(NULL, PERIOD_M15, ADXPeriod, PRICE_CLOSE, MODE_MINUSDI, 1);
+   double atr1   = iATR(NULL, PERIOD_M15, ATRPeriod, 1);
+   double atrPips = (atr1 > 0.0 ? atr1 / PipSize() : 0.0);
+
+   RefreshRates();
+
+   return("\"market\":{" +
+          "\"symbol\":\"" + Symbol() + "\"," +
+          "\"bid\":" + DoubleToString(Bid, Digits) + "," +
+          "\"ask\":" + DoubleToString(Ask, Digits) + "," +
+          "\"spread_pips\":" + DoubleToString(SpreadPointsToPips(CurrentSpreadPoints()), 2) + "," +
+          "\"ema_fast\":" + DoubleToString(fast1, Digits) + "," +
+          "\"ema_slow\":" + DoubleToString(slow1, Digits) + "," +
+          "\"ema_trend\":" + DoubleToString(trend1, Digits) + "," +
+          "\"adx\":" + DoubleToString(adx1, 2) + "," +
+          "\"di_plus\":" + DoubleToString(plus1, 2) + "," +
+          "\"di_minus\":" + DoubleToString(minus1, 2) + "," +
+          "\"atr_pips\":" + DoubleToString(atrPips, 2) + "," +
+          "\"weekday\":" + IntegerToString(TimeDayOfWeek(TimeCurrent())) + "," +
+          "\"hour\":" + IntegerToString(TimeHour(TimeCurrent())) + "," +
+          "\"current_bar_m15\":{" +
+             "\"o\":" + DoubleToString(iOpen(NULL, PERIOD_M15, 0), Digits) + "," +
+             "\"h\":" + DoubleToString(iHigh(NULL, PERIOD_M15, 0), Digits) + "," +
+             "\"l\":" + DoubleToString(iLow(NULL, PERIOD_M15, 0), Digits) + "," +
+             "\"c\":" + DoubleToString(iClose(NULL, PERIOD_M15, 0), Digits) +
+          "}," +
+          "\"candles_m15\":" + BuildCandlesJson(PERIOD_M15, AIContextCandlesM15) + "," +
+          "\"candles_htf\":" + BuildCandlesJson(HigherTimeframe, AIContextCandlesHTF) +
+          "}");
+  }
+
 bool AIEntryVeto(const AsturSignalContext &ctx, string &reason)
   {
    reason = "";
@@ -1338,14 +1431,10 @@ bool AIEntryVeto(const AsturSignalContext &ctx, string &reason)
                  "\"side\":\"" + side + "\"," +
                  "\"score\":" + IntegerToString(ctx.confluenceScore) + "," +
                  "\"score_max\":" + IntegerToString(ctx.confluenceMax) + "," +
-                 "\"symbol\":\"" + Symbol() + "\"," +
-                 "\"close\":" + DoubleToString(ctx.close1, Digits) + "," +
-                 "\"adx\":" + DoubleToString(ctx.adx1, 2) + "," +
-                 "\"atr_pips\":" + DoubleToString(ctx.atrPips, 2) + "," +
                  "\"htf_ok\":" + (ctx.htfOk ? "true" : "false") + "," +
                  "\"trend_slope_ok\":" + (ctx.trendSlopeOk ? "true" : "false") + "," +
                  "\"adx_slope_ok\":" + (ctx.adxSlopeOk ? "true" : "false") + "," +
-                 "\"spread_pips\":" + DoubleToString(SpreadPointsToPips(CurrentSpreadPoints()), 2) +
+                 BuildMarketSnapshotJson() +
                  "}";
 
    string response;
@@ -1456,7 +1545,7 @@ void AIManageCheck(const int ticket, const int type, const string orderKey)
                  "\"score\":" + IntegerToString(scoreAtEntry) + "," +
                  "\"profit_r\":" + DoubleToString(profitR, 2) + "," +
                  "\"minutes_open\":" + IntegerToString((int)((TimeCurrent() - openTime) / 60)) + "," +
-                 "\"atr_pips\":" + DoubleToString(atr / PipSize(), 2) +
+                 BuildMarketSnapshotJson() +
                  "}";
 
    string response;
@@ -1709,7 +1798,7 @@ void UpdateDashboard()
                "IA: activa en modo SOMBRA (solo observa)" :
                "IA: ACTIVA (puede vetar/proteger/cerrar segun permisos)";
 
-   Comment("ASTUR Safe EA v0.40\n",
+   Comment("ASTUR Safe EA v0.41\n",
            "Modo: ", (IsDemo() ? "DEMO" : "REAL"),
            " | Real permitido: ", (AllowRealAccount ? "SI" : "NO"), "\n",
            "Cuenta: ", AccountNumber(), " | ", Symbol(), " M15\n",

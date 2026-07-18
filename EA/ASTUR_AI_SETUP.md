@@ -1,4 +1,4 @@
-# ASTUR Safe EA v0.40 + IA local
+# ASTUR Safe EA v0.41 + IA local
 
 La IA es una segunda opinión limitada. El algoritmo determinista, el stop
 loss y los límites de riesgo siempre mandan. La IA nunca puede abrir una
@@ -11,6 +11,35 @@ ATR fija (`PROTECT`, desactivado por defecto) o cerrar antes de tiempo
 al puente vía `WebRequest`. Sigue viniendo **apagado** (`UseLocalAI=false`)
 y, al activarlo, arranca en **modo sombra** (`AIShadowMode=true`): solo
 analiza y registra, nunca actúa, hasta que lo cambies tú explícitamente.
+
+## Contexto de mercado en vivo (v0.41)
+
+Cada consulta a la IA (`ENTRY` o `MANAGE`) incluye un objeto `market`
+recalculado **en el instante de esa consulta**, no datos guardados de
+cuando se abrió la operación:
+
+- `bid`, `ask`, `spread_pips`: precio y spread actuales.
+- `ema_fast`, `ema_slow`, `ema_trend`, `adx`, `di_plus`, `di_minus`,
+  `atr_pips`: indicadores recalculados en el momento.
+- `weekday`, `hour`: para que la IA tenga noción de sesión/horario.
+- `current_bar_m15`: la vela M15 todavía en formación (OHLC parcial).
+- `candles_m15`: las últimas `AIContextCandlesM15` velas M15 **cerradas**
+  (20 por defecto), en orden cronológico.
+- `candles_htf`: las últimas `AIContextCandlesHTF` velas de la temporalidad
+  superior configurada en `HigherTimeframe` (10 por defecto, H1 si no se
+  cambió), también cerradas y en orden cronológico.
+
+Esto le da a la IA movimiento real reciente del gráfico (no solo un puñado
+de valores sueltos) para razonar sobre tendencia, momentum y estructura
+antes de vetar una entrada o sugerir `PROTECT`/`CLOSE`. Sigue siendo, eso
+sí, "en vivo" en el sentido de MT4: un snapshot recalculado en cada
+consulta puntual (cada nueva vela M15 para `ENTRY`, cada
+`AIManageIntervalSeconds` para `MANAGE`), no un flujo continuo — ver la
+nota sobre `WebRequest` bloqueante más abajo.
+
+`AIContextCandlesM15=0` / `AIContextCandlesHTF=0` desactivan el envío de
+esa serie de velas (el resto del snapshot se sigue enviando) si quieres
+peticiones más ligeras/rápidas para un modelo local lento.
 
 ## Seguridad y separación (léelo antes de arrancar nada)
 
