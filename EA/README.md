@@ -1,4 +1,4 @@
-# ASTUR Safe EA (v0.41) — EURUSD M15, MetaTrader 4
+# ASTUR Safe EA (v0.42) — EURUSD M15, MetaTrader 4
 
 ## Antes de leer nada más: lo que este EA NO es
 
@@ -128,10 +128,27 @@ la vela M15 aún en formación — más dos series de velas OHLC cerradas
 defecto, de la temporalidad superior) para que la IA razone sobre
 tendencia y estructura real del gráfico, no solo sobre un par de valores
 sueltos. Sigue siendo "en vivo" en el sentido de MT4: un snapshot fresco
-en cada consulta puntual, no un streaming continuo (`WebRequest` es
-bloqueante, por eso `MANAGE` se limita a una consulta cada
-`AIManageIntervalSeconds`). Detalle del formato JSON en la sección
-correspondiente de `ASTUR_AI_SETUP.md`.
+en cada consulta puntual, no un streaming continuo. Detalle del formato
+JSON en la sección correspondiente de `ASTUR_AI_SETUP.md`.
+
+## Qué cambió en v0.42: MANAGE deja de bloquear el EA
+
+`WebRequest` es sincrónica en MQL4 — no hay forma de que deje de serlo sin
+recurrir a una DLL nativa (lo que exige activar "Permitir importación de
+DLL" en MT4, con el riesgo que eso implica). En vez de eso, `MANAGE`
+(`UseAsyncManage=true` por defecto) ahora usa una cola de archivos: el EA
+escribe una petición y sigue con su tick sin esperar; un hilo del puente
+la procesa y escribe la respuesta cuando el modelo termina; el EA solo
+comprueba en ticks posteriores (lectura de archivo, instantánea) si ya
+llegó. El resultado es que `OnTick()` nunca vuelve a congelarse esperando
+a la IA, y por eso `AIManageIntervalSeconds` bajó de 60s a 20s por
+defecto — se puede consultar más seguido sin coste. Requiere configurar
+`ASTUR_AI_MQL4_FILES_DIR` en el puente (ver `.env.example` y la sección
+dedicada en `ASTUR_AI_SETUP.md`); sin eso, `MANAGE` async simplemente hará
+timeout una y otra vez — o pon `UseAsyncManage=false` para el
+comportamiento síncrono anterior. `ENTRY` se queda síncrono a propósito
+(ocurre como mucho una vez cada 15 minutos, coste acotado y sin la
+complejidad de una entrada "pendiente de IA" mientras el precio se mueve).
 
 ## Limitación honesta del filtro de noticias
 
@@ -191,6 +208,9 @@ descarga nada:
 | `MaxSpreadToSLRatio` | `0.20` | Rechaza la entrada si el spread supera este % del SL planeado |
 | `UseNewsFilter` / `NewsFileName` / `NewsBufferMinutesBefore` / `NewsBufferMinutesAfter` / `NewsImpactFilter` / `NewsReloadMinutes` | `false` / `ASTUR_News.csv` / `30` / `15` / `HIGH` / `60` | Filtro de noticias vía CSV local |
 | `UseDiagnosticsLog` / `DiagnosticsFileName` | `true` / `ASTUR_Diagnostics.csv` | Log CSV de cada señal evaluada, tomada o bloqueada |
+| `UseLocalAI` / `AIShadowMode` / `AISharedSecret` | `false` / `true` / `""` | Integración con IA local (ver `ASTUR_AI_SETUP.md`); requiere token si se activa |
+| `AIContextCandlesM15` / `AIContextCandlesHTF` | `20` / `10` | Velas OHLC cerradas incluidas en el contexto en vivo enviado a la IA |
+| `UseAsyncManage` / `AIManageIntervalSeconds` / `AIAsyncTimeoutSec` | `true` / `20` / `45` | `MANAGE` por cola de archivos (no bloquea el EA); intervalo entre consultas y timeout de espera |
 
 Todos los filtros nuevos se pueden desactivar individualmente desde las
 propiedades del EA para volver a un comportamiento más parecido a v0.1.

@@ -1,4 +1,4 @@
-# ASTUR Safe EA v0.41 + IA local
+# ASTUR Safe EA v0.42 + IA local
 
 La IA es una segunda opinión limitada. El algoritmo determinista, el stop
 loss y los límites de riesgo siempre mandan. La IA nunca puede abrir una
@@ -40,6 +40,53 @@ nota sobre `WebRequest` bloqueante más abajo.
 `AIContextCandlesM15=0` / `AIContextCandlesHTF=0` desactivan el envío de
 esa serie de velas (el resto del snapshot se sigue enviando) si quieres
 peticiones más ligeras/rápidas para un modelo local lento.
+
+## Gestión (MANAGE) asíncrona: WebRequest ya no bloquea el EA (v0.42)
+
+`WebRequest` es sincrónica en MQL4: no existe una versión "async" nativa
+en el lenguaje. Antes de v0.42, cada consulta `MANAGE` dejaba el EA (y en
+la práctica la terminal) parado hasta `AITimeoutMs` (8s por defecto) cada
+`AIManageIntervalSeconds`. Desde v0.42, con `UseAsyncManage=true` (por
+defecto), eso ya no ocurre:
+
+1. El EA escribe un archivo de petición (`AIAsyncRequestFileName`,
+   `ASTUR_AI_ManageRequest.json` por defecto) con el contexto completo
+   (igual que antes) y sigue con su tick normal — no espera nada.
+2. Un hilo del puente (`file_watcher_loop`, activo solo si configuras
+   `ASTUR_AI_MQL4_FILES_DIR`) detecta ese archivo, consulta el modelo con
+   toda la calma que necesite y escribe la respuesta en
+   `AIAsyncResponseFileName` (`ASTUR_AI_ManageResponse.txt` por defecto).
+3. El EA, en ticks posteriores, solo comprueba si ese archivo ya existe
+   (`FileIsExist`, prácticamente instantáneo) — nunca vuelve a bloquear.
+   Si no hay respuesta al cabo de `AIAsyncTimeoutSec` (45s por defecto), se
+   registra como `SIN_RESPUESTA` y se libera el turno para la próxima
+   consulta, sin haber congelado el EA en ningún momento.
+
+Cada petición lleva un `request_id` único; si la respuesta no coincide (o
+si la operación sobre la que se preguntó ya cambió o se cerró mientras se
+esperaba), se descarta sin actuar — nunca se aplica una decisión a la
+operación equivocada.
+
+**Requisito:** `ASTUR_AI_MQL4_FILES_DIR` (variable de entorno del puente,
+ver `.env.example`) debe apuntar a la MISMA carpeta `MQL4/Files` que usa
+la terminal donde corre el EA (en MT4: `Archivo > Abrir carpeta de datos >
+MQL4 > Files`). Sin esa variable configurada, el vigilante de archivos no
+arranca y `UseAsyncManage=true` se queda esperando una respuesta que nunca
+llega (siempre acabará en timeout) — en ese caso, o configuras la carpeta,
+o pones `UseAsyncManage=false` para volver al modo síncrono/bloqueante de
+antes.
+
+**Nota de seguridad:** esta vía no pasa por `AISharedSecret` (no es una
+petición de red, es la misma máquina leyendo/escribiendo archivos en su
+propio disco). Su seguridad depende de los permisos del sistema de
+archivos sobre esa carpeta — normal en un VPS de un solo usuario, pero
+tenlo en cuenta si alguna vez compartes esa máquina con otras cuentas.
+
+`ENTRY` (el veto de entrada) sigue siendo síncrono a propósito: ocurre como
+mucho una vez cada 15 minutos (al cerrar una vela M15 con señal válida),
+así que el coste de una espera acotada ahí es mucho menor que hacerlo
+esperar varios ticks a media vela — y evita la complejidad de "entrada
+pendiente de IA" mientras el precio sigue moviéndose.
 
 ## Seguridad y separación (léelo antes de arrancar nada)
 
@@ -98,6 +145,9 @@ peticiones más ligeras/rápidas para un modelo local lento.
   estaba en modo sombra o activo).
 - `astur_ai_memory.sqlite3`: lo crea el puente para conservar decisiones y
   resultados en el VPS.
+- `ASTUR_AI_ManageRequest.json` / `ASTUR_AI_ManageResponse.txt`: cola de
+  archivos para `MANAGE` asíncrono (ver arriba). Se crean y borran solos en
+  `MQL4/Files`; no hace falta tocarlos a mano.
 
 ## 1. Arrancar la IA local
 
@@ -109,11 +159,15 @@ En PowerShell, dentro de la carpeta que contiene el puente:
 $env:ASTUR_AI_PROVIDER="ollama"
 $env:ASTUR_AI_MODEL="qwen2.5:7b"
 $env:ASTUR_AI_SECRET="<tu-token-generado>"
+$env:ASTUR_AI_MQL4_FILES_DIR="C:\Users\<tu-usuario>\AppData\Roaming\MetaQuotes\Terminal\<hash>\MQL4\Files"
 python .\astur_ai_bridge.py
 ```
 
 El modelo tiene que existir ya en Ollama. Se puede cambiar por cualquier otro
-modelo local disponible.
+modelo local disponible. `ASTUR_AI_MQL4_FILES_DIR` es lo que activa la cola
+de archivos para `MANAGE` asíncrono (ver sección anterior); si lo omites,
+el puente sigue funcionando solo por HTTP (`ENTRY` funciona igual, `MANAGE`
+necesitaría `UseAsyncManage=false` en el EA para no quedarse en timeout).
 
 ### LM Studio u otra API compatible con OpenAI
 
@@ -168,9 +222,11 @@ cerrados; ese número es solo un mínimo técnico, no una validación suficiente
   del EA primero. `BLOCK` solo veta si `confidence >= AIMinConfidence`
   (0.55 por defecto) y `AIShadowMode=false`.
 - `MANAGE`: la IA solo puede responder `HOLD`, `PROTECT` o `CLOSE`, y se
-  consulta como mucho una vez cada `AIManageIntervalSeconds` (60s por
-  defecto) por operación abierta, no en cada tick — `WebRequest` es una
-  llamada bloqueante, así que consultarla en cada tick pausaría el EA.
+  consulta como mucho una vez cada `AIManageIntervalSeconds` (20s por
+  defecto) por operación abierta, no en cada tick. Desde v0.42 es
+  asíncrona por defecto (`UseAsyncManage=true`, ver sección dedicada más
+  arriba), así que ese intervalo ya no bloquea el EA — se puede bajar sin
+  miedo a que la terminal se quede pausada.
 - `PROTECT` (si `AIAllowProtectiveStop=true`) solo acerca el SL mediante
   `AIProtectATRMultiple × ATR`; el código verifica explícitamente que el
   nuevo SL sea más ajustado que el actual antes de aplicarlo — nunca lo aleja.

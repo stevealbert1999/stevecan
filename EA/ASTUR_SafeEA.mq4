@@ -1,5 +1,5 @@
 #property strict
-#property version   "0.41"
+#property version   "0.42"
 #property description "ASTUR Safe EA: prototipo demo-first para EURUSD M15"
 #property description "Sin martingala, grid ni promedios. SL obligatorio y riesgo limitado."
 #property description "v0.2: gestion de posicion por tick (breakeven/trailing), filtros de senal reforzados y filtro de noticias opcional via CSV."
@@ -7,6 +7,7 @@
 #property description "v0.31/v0.32: comparacion robusta del spread en puntos y cierre parcial ligado a la hora de apertura (a prueba de cambio de ticket)."
 #property description "v0.40: integracion real con el puente de IA local (veto/gestion/reporte), apagada y en modo sombra por defecto, autenticada por token."
 #property description "v0.41: contexto de mercado en vivo para la IA (precio, indicadores recalculados y velas OHLC recientes M15/temporalidad superior en cada consulta)."
+#property description "v0.42: gestion (MANAGE) de la IA asincrona por cola de archivos: ya no bloquea OnTick() esperando WebRequest."
 
 // IMPORTANTE (leer antes de usar):
 // - Ningun EA, por bueno que sea, puede garantizar ganancias ni evitar todas
@@ -138,11 +139,24 @@ input bool   AIFailClosed            = true;
 input string AIBridgeURL             = "http://127.0.0.1:8765";
 input string AISharedSecret          = "";
 input int    AITimeoutMs             = 8000;
-input int    AIManageIntervalSeconds = 60;
+input int    AIManageIntervalSeconds = 20;
 input double AIMinConfidence         = 0.55;
 input double AIProtectATRMultiple    = 0.50;
 input string AIDecisionsFileName     = "ASTUR_AI_Decisions.csv";
 input string AIOutcomesFileName      = "ASTUR_TradeOutcomes.csv";
+
+// Gestion (MANAGE) asincrona: WebRequest es sincrona/bloqueante en MQL4, asi
+// que en vez de esperar la respuesta dentro de OnTick(), el EA escribe un
+// archivo de peticion y sigue con su tick normal; un hilo del puente
+// (astur_ai_bridge.py, ver ASTUR_AI_MQL4_FILES_DIR en .env.example) lo
+// recoge, consulta el modelo con calma y escribe un archivo de respuesta.
+// El EA solo comprueba en ticks posteriores si ya aparecio (FileIsExist es
+// practicamente instantaneo), sin volver a bloquear la terminal. ENTRY
+// sigue siendo sincrona (una vez por vela M15 cerrada, coste acotado).
+input bool   UseAsyncManage          = true;
+input string AIAsyncRequestFileName  = "ASTUR_AI_ManageRequest.json";
+input string AIAsyncResponseFileName = "ASTUR_AI_ManageResponse.txt";
+input int    AIAsyncTimeoutSec       = 45;
 
 // Contexto de mercado en vivo enviado a la IA en cada consulta: precio
 // actual, indicadores recalculados en el momento y series de velas OHLC
@@ -158,6 +172,15 @@ string   g_status            = "Inicializando";
 bool     g_riskStopAnnounced = false;
 string   g_lastKnownOrderKey = "";
 datetime g_lastAIManageQuery = 0;
+
+// Estado de la peticion MANAGE asincrona pendiente (a lo sumo una a la vez)
+string   g_aiPendingRequestId = "";
+string   g_aiPendingOrderKey  = "";
+int      g_aiPendingTicket    = 0;
+string   g_aiPendingSide      = "";
+int      g_aiPendingScore     = -1;
+datetime g_aiPendingSentAt    = 0;
+int      g_aiRequestCounter   = 0;
 
 struct AsturNewsEvent
   {
@@ -218,7 +241,7 @@ int OnInit()
       g_status = "Listo; esperando una senal cerrada";
 
    UpdateDashboard();
-   Print("ASTUR Safe EA v0.41 iniciado. Cuenta=", AccountNumber(),
+   Print("ASTUR Safe EA v0.42 iniciado. Cuenta=", AccountNumber(),
          ", modo=", (IsDemo() ? "DEMO" : "REAL"),
          ", simbolo=", Symbol(), ", periodo=M15",
          ", IA=", (UseLocalAI ? (AIShadowMode ? "sombra" : "activa") : "apagada"));
@@ -456,6 +479,20 @@ bool InputsAreValid()
         {
          Print("AIContextCandlesM15 y AIContextCandlesHTF deben estar entre 0 y 200.");
          return(false);
+        }
+
+      if(UseAsyncManage)
+        {
+         if(StringLen(AIAsyncRequestFileName) == 0 || StringLen(AIAsyncResponseFileName) == 0)
+           {
+            Print("AIAsyncRequestFileName y AIAsyncResponseFileName no pueden estar vacios si UseAsyncManage esta activo.");
+            return(false);
+           }
+         if(AIAsyncTimeoutSec <= 0)
+           {
+            Print("AIAsyncTimeoutSec debe ser > 0.");
+            return(false);
+           }
         }
      }
 
@@ -809,7 +846,7 @@ void ExecuteSignal(const int signal, const int confluenceScore,
 
    ResetLastError();
    int ticket = OrderSend(Symbol(), orderType, lots, entry, slippagePoints,
-                          stopLoss, takeProfit, "ASTUR_SAFE_V0.41",
+                          stopLoss, takeProfit, "ASTUR_SAFE_V0.42",
                           MagicNumber, 0, arrowColor);
 
    if(ticket < 0)
@@ -1515,6 +1552,20 @@ void AIManageCheck(const int ticket, const int type, const string orderKey)
   {
    if(!UseLocalAI)
       return;
+
+   if(UseAsyncManage)
+      AIManageCheckAsync(ticket, type, orderKey);
+   else
+      AIManageCheckSync(ticket, type, orderKey);
+  }
+
+//+------------------------------------------------------------------+
+//| Variante sincrona (bloqueante): la conserva UseAsyncManage=false   |
+//| como via de respaldo/depuracion. WebRequest pausa el EA hasta      |
+//| AITimeoutMs mientras espera respuesta.                             |
+//+------------------------------------------------------------------+
+void AIManageCheckSync(const int ticket, const int type, const string orderKey)
+  {
    if(TimeCurrent() - g_lastAIManageQuery < AIManageIntervalSeconds)
       return;
    g_lastAIManageQuery = TimeCurrent();
@@ -1567,6 +1618,171 @@ void AIManageCheck(const int ticket, const int type, const string orderKey)
 
    if(confidence < AIMinConfidence)
       return;
+
+   if(action == "PROTECT" && AIAllowProtectiveStop)
+      ApplyAIProtect(ticket, type);
+   else if(action == "CLOSE" && AIAllowEarlyClose)
+      CloseTicketImmediately(ticket);
+  }
+
+//+------------------------------------------------------------------+
+//| Variante asincrona (recomendada): NUNCA bloquea OnTick(). Escribe  |
+//| un archivo de peticion y sigue; en ticks posteriores comprueba,    |
+//| con una simple lectura de archivo (instantanea), si ya hay         |
+//| respuesta. La espera real por el modelo queda repartida entre      |
+//| varios ticks en vez de congelar uno solo.                          |
+//+------------------------------------------------------------------+
+void AIManageCheckAsync(const int ticket, const int type, const string orderKey)
+  {
+   // Si la operacion sobre la que se pregunto ya no es la actual (cerro,
+   // cambio de ticket por un cierre parcial, etc.), descarta cualquier
+   // peticion pendiente: no tiene sentido actuar sobre una orden distinta.
+   if(g_aiPendingRequestId != "" && g_aiPendingOrderKey != orderKey)
+     {
+      g_aiPendingRequestId = "";
+      g_aiPendingOrderKey  = "";
+     }
+
+   if(g_aiPendingRequestId != "")
+     {
+      AIManageCheckPollResponse(type);
+      return;
+     }
+
+   if(TimeCurrent() - g_lastAIManageQuery < AIManageIntervalSeconds)
+      return;
+   g_lastAIManageQuery = TimeCurrent();
+
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return;
+
+   double   openPrice = OrderOpenPrice();
+   datetime openTime  = OrderOpenTime();
+   double   atr       = iATR(NULL, PERIOD_M15, ATRPeriod, 0);
+   if(atr <= 0.0)
+      return;
+
+   RefreshRates();
+
+   double riskValue = GlobalVariableCheck(g_statePrefix + "RISK_" + orderKey) ?
+                       GlobalVariableGet(g_statePrefix + "RISK_" + orderKey) : 0.0;
+   double profitPrice  = (type == OP_BUY ? Bid - openPrice : openPrice - Ask);
+   double profitR      = (riskValue > 0.0 ? profitPrice / riskValue : 0.0);
+   int    scoreAtEntry = GlobalVariableCheck(g_statePrefix + "SCORE_" + orderKey) ?
+                          (int)GlobalVariableGet(g_statePrefix + "SCORE_" + orderKey) : -1;
+   string side = (type == OP_BUY ? "BUY" : "SELL");
+
+   g_aiRequestCounter++;
+   string requestId = orderKey + "_" + IntegerToString(g_aiRequestCounter) + "_" + IntegerToString((int)TimeCurrent());
+
+   string json = "{" +
+                 "\"request_id\":\"" + requestId + "\"," +
+                 "\"event\":\"MANAGE\"," +
+                 "\"ticket\":" + IntegerToString(ticket) + "," +
+                 "\"side\":\"" + side + "\"," +
+                 "\"score\":" + IntegerToString(scoreAtEntry) + "," +
+                 "\"profit_r\":" + DoubleToString(profitR, 2) + "," +
+                 "\"minutes_open\":" + IntegerToString((int)((TimeCurrent() - openTime) / 60)) + "," +
+                 BuildMarketSnapshotJson() +
+                 "}";
+
+   // Se limpia cualquier respuesta vieja antes de lanzar la peticion nueva,
+   // para que nunca se pueda leer por error una respuesta de un ciclo
+   // anterior (el request_id ya protege contra esto, pero asi ni siquiera
+   // se llega a comparar).
+   if(FileIsExist(AIAsyncResponseFileName))
+      FileDelete(AIAsyncResponseFileName);
+
+   if(WriteAIRequestFile(json))
+     {
+      g_aiPendingRequestId = requestId;
+      g_aiPendingOrderKey  = orderKey;
+      g_aiPendingTicket    = ticket;
+      g_aiPendingSide      = side;
+      g_aiPendingScore     = scoreAtEntry;
+      g_aiPendingSentAt    = TimeCurrent();
+     }
+  }
+
+bool WriteAIRequestFile(const string json)
+  {
+   string tempName = AIAsyncRequestFileName + ".tmp";
+
+   ResetLastError();
+   int handle = FileOpen(tempName, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+     {
+      Print("ASTUR IA: no se pudo escribir ", tempName, ". Error=", GetLastError());
+      return(false);
+     }
+   FileWriteString(handle, json);
+   FileClose(handle);
+
+   ResetLastError();
+   if(!FileMove(tempName, 0, AIAsyncRequestFileName, FILE_REWRITE))
+     {
+      Print("ASTUR IA: no se pudo mover ", tempName, " a ", AIAsyncRequestFileName, ". Error=", GetLastError());
+      FileDelete(tempName);
+      return(false);
+     }
+
+   return(true);
+  }
+
+void AIManageCheckPollResponse(const int type)
+  {
+   if(TimeCurrent() - g_aiPendingSentAt > AIAsyncTimeoutSec)
+     {
+      LogAIDecision("MANAGE", g_aiPendingTicket, g_aiPendingSide, g_aiPendingScore,
+                    "SIN_RESPUESTA", 0.0, "timeout esperando al puente (async)");
+      g_aiPendingRequestId = "";
+      g_aiPendingOrderKey  = "";
+      return;
+     }
+
+   if(!FileIsExist(AIAsyncResponseFileName))
+      return; // todavia no ha respondido; se revisa de nuevo en el proximo tick
+
+   int handle = FileOpen(AIAsyncResponseFileName, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+      return;
+
+   string content = "";
+   while(!FileIsEnding(handle))
+      content += FileReadString(handle);
+   FileClose(handle);
+
+   ResetLastError();
+   FileDelete(AIAsyncResponseFileName);
+
+   string parts[];
+   int n = StringSplit(content, '|', parts);
+   if(n < 4 || parts[0] != g_aiPendingRequestId)
+      return; // respuesta ajena, corrupta o de un ciclo anterior: se ignora sin actuar
+
+   string action     = parts[1];
+   double confidence  = StringToDouble(parts[2]);
+   string reason      = parts[3];
+   for(int i = 4; i < n; i++)
+      reason += "|" + parts[i];
+
+   int    ticket = g_aiPendingTicket;
+   string side   = g_aiPendingSide;
+   int    score  = g_aiPendingScore;
+
+   g_aiPendingRequestId = "";
+   g_aiPendingOrderKey  = "";
+
+   LogAIDecision("MANAGE", ticket, side, score, action, confidence, reason);
+
+   if(AIShadowMode)
+      return; // solo registra, nunca actua
+
+   if(confidence < AIMinConfidence)
+      return;
+
+   if(!OrderSelect(ticket, SELECT_BY_TICKET))
+      return; // la operacion ya no existe con ese ticket; no se actua sobre nada
 
    if(action == "PROTECT" && AIAllowProtectiveStop)
       ApplyAIProtect(ticket, type);
@@ -1798,7 +2014,7 @@ void UpdateDashboard()
                "IA: activa en modo SOMBRA (solo observa)" :
                "IA: ACTIVA (puede vetar/proteger/cerrar segun permisos)";
 
-   Comment("ASTUR Safe EA v0.41\n",
+   Comment("ASTUR Safe EA v0.42\n",
            "Modo: ", (IsDemo() ? "DEMO" : "REAL"),
            " | Real permitido: ", (AllowRealAccount ? "SI" : "NO"), "\n",
            "Cuenta: ", AccountNumber(), " | ", Symbol(), " M15\n",

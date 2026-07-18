@@ -6,10 +6,18 @@ consulta un modelo local (Ollama o una API compatible con OpenAI), valida la
 respuesta y devuelve una accion dentro de una lista cerrada.
 
 ESTADO: ASTUR_SafeEA.mq4 (desde v0.40) ya llama a este puente via
-WebRequest cuando UseLocalAI=true. Todas las rutas (incluida /health)
+WebRequest cuando UseLocalAI=true. Todas las rutas HTTP (incluida /health)
 exigen el token compartido ASTUR_AI_SECRET si esta configurado: sin el
 token correcto, cualquier peticion recibe 401. Configuralo SIEMPRE antes
 de exponer este servicio, aunque solo escuche en localhost.
+
+Desde v0.42 este proceso tambien puede vigilar una cola de archivos
+(ASTUR_AI_MQL4_FILES_DIR) para las consultas de gestion (MANAGE) del EA,
+que asi dejan de bloquear WebRequest dentro de OnTick(): el EA escribe un
+archivo de peticion y este proceso escribe la respuesta cuando el modelo
+termina. Esa via no pasa por el token HTTP (no es red, es la misma
+maquina/usuario): su seguridad depende de los permisos del sistema de
+archivos sobre esa carpeta, no de ASTUR_AI_SECRET.
 """
 
 from __future__ import annotations
@@ -35,6 +43,14 @@ MODEL_TIMEOUT = float(os.getenv("ASTUR_AI_MODEL_TIMEOUT", "25"))
 DATABASE = Path(os.getenv("ASTUR_AI_DATABASE", "astur_ai_memory.sqlite3"))
 MIN_MEMORY = int(os.getenv("ASTUR_AI_MIN_MEMORY", "30"))
 SHARED_SECRET = os.getenv("ASTUR_AI_SECRET", "").strip()
+
+# Cola de archivos para MANAGE asincrono (ver ASTUR_AI_SETUP.md). Vacio
+# desactiva el vigilante; el EA sigue funcionando solo por HTTP en ese caso
+# (o con UseAsyncManage=false, sincrono, para MANAGE).
+MQL4_FILES_DIR = os.getenv("ASTUR_AI_MQL4_FILES_DIR", "").strip()
+REQUEST_FILE = os.getenv("ASTUR_AI_REQUEST_FILE", "ASTUR_AI_ManageRequest.json").strip()
+RESPONSE_FILE = os.getenv("ASTUR_AI_RESPONSE_FILE", "ASTUR_AI_ManageResponse.txt").strip()
+WATCH_POLL_SECONDS = float(os.getenv("ASTUR_AI_WATCH_POLL_SECONDS", "1.0"))
 
 if PROVIDER == "ollama":
     MODEL_URL = os.getenv("ASTUR_AI_URL", "http://127.0.0.1:11434/api/chat")
@@ -276,6 +292,52 @@ def save_outcome(payload: dict[str, Any]) -> None:
             connection.close()
 
 
+def process_decision(payload: dict[str, Any]) -> str:
+    """Logica compartida por el endpoint HTTP /decision y la cola de archivos."""
+    raw_decision = query_model(payload)
+    decision = sanitize_decision(payload, raw_decision)
+    save_decision(payload, decision)
+    return f"{decision['action']}|{decision['confidence']:.4f}|{decision['reason']}"
+
+
+def file_watcher_loop() -> None:
+    """Vigila ASTUR_AI_MQL4_FILES_DIR por peticiones MANAGE asincronas del EA.
+
+    Debe apuntar a la MISMA carpeta MQL4/Files que usa la terminal donde
+    corre el EA. Cada peticion se procesa con la misma logica que el
+    endpoint HTTP y la respuesta se escribe de forma atomica (escritura a
+    un .tmp seguido de os.replace) para que el EA nunca lea un archivo a
+    medio escribir.
+    """
+    request_path = Path(MQL4_FILES_DIR) / REQUEST_FILE
+    response_path = Path(MQL4_FILES_DIR) / RESPONSE_FILE
+    tmp_response_path = Path(MQL4_FILES_DIR) / (RESPONSE_FILE + ".tmp")
+
+    print(f"ASTUR AI bridge: vigilando {request_path} para peticiones MANAGE asincronas.", flush=True)
+
+    while True:
+        try:
+            if request_path.exists():
+                raw = request_path.read_text(encoding="utf-8")
+                request_path.unlink(missing_ok=True)
+
+                request_id = ""
+                try:
+                    payload = json.loads(raw)
+                    request_id = str(payload.get("request_id", ""))
+                    decision_line = process_decision(payload)
+                    result = f"{request_id}|{decision_line}"
+                except Exception as exc:  # nunca tumbar el hilo por una peticion mala
+                    result = f"{request_id}|ERROR|0|{type(exc).__name__}: {exc}"
+
+                tmp_response_path.write_text(result, encoding="utf-8")
+                os.replace(tmp_response_path, response_path)
+        except Exception as exc:
+            print(f"ASTUR AI bridge: error en el vigilante de archivos: {exc}", flush=True)
+
+        time.sleep(WATCH_POLL_SECONDS)
+
+
 def is_authorized(headers: Any) -> bool:
     """Autoriza la peticion contra el token compartido.
 
@@ -290,7 +352,7 @@ def is_authorized(headers: Any) -> bool:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ASTUR-AI/0.40"
+    server_version = "ASTUR-AI/0.42"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print("[%s] %s" % (self.log_date_time_string(), fmt % args), flush=True)
@@ -339,13 +401,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_text(404, "not found")
                 return
 
-            raw_decision = query_model(payload)
-            decision = sanitize_decision(payload, raw_decision)
-            save_decision(payload, decision)
-            self.send_text(
-                200,
-                f"{decision['action']}|{decision['confidence']:.4f}|{decision['reason']}",
-            )
+            self.send_text(200, process_decision(payload))
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_text(400, f"ERROR|0|peticion invalida: {exc}")
         except (urllib.error.URLError, TimeoutError) as exc:
@@ -372,6 +428,18 @@ def main() -> None:
             "ASTUR_AI_SECRET este configurado y de que el firewall lo proteja.",
             flush=True,
         )
+
+    if MQL4_FILES_DIR:
+        watcher = threading.Thread(target=file_watcher_loop, daemon=True)
+        watcher.start()
+    else:
+        print(
+            "ASTUR AI bridge: ASTUR_AI_MQL4_FILES_DIR no configurado; la cola de "
+            "archivos para MANAGE asincrono esta desactivada (solo HTTP). Ver "
+            "ASTUR_AI_SETUP.md si quieres que MANAGE deje de bloquear el EA.",
+            flush=True,
+        )
+
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(
         f"ASTUR AI bridge escuchando en http://{HOST}:{PORT} "
