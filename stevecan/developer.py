@@ -84,13 +84,16 @@ async def improve(project: Path, instruction: str, agent: str = "developer") -> 
         report["baseline_ok"] = baseline["ok"] if baseline else None
         feedback = ""
         for attempt in range(1, 4):
-            data = await llm.ask_json(
-                "Eres un ingeniero senior que mejora un proyecto existente con cambios pequeños, seguros y completos. "
-                "Devuelve el contenido COMPLETO de cada fichero que cambies (máximo 4 ficheros), respetando el estilo "
-                "del proyecto. No borres funcionalidad. No inventes APIs.",
-                f"Proyecto: {project.name}\nObjetivo: {instruction}\n\n{_context(project, instruction)}\n{feedback}\n"
-                'Devuelve {"summary":"qué y por qué","files":[{"path":"ruta/relativa","content":"contenido completo"}]}',
-                max_tokens=6000)
+            sys_p = ("Eres un ingeniero senior que mejora un proyecto existente con cambios pequeños, seguros y completos. "
+                     "Devuelve el contenido COMPLETO de cada fichero que cambies (máximo 4 ficheros), respetando el estilo "
+                     "del proyecto. No borres funcionalidad. No inventes APIs. Responde ÚNICAMENTE con JSON válido.")
+            lessons = "\n".join(f"- {l['lesson']}" for l in memory.top_lessons(instruction, 4))
+            user_p = (f"Proyecto: {project.name}\nObjetivo: {instruction}\n\n{_context(project, instruction)}\n{feedback}\n"
+                      f"Lecciones aprendidas:\n{lessons}\n"
+                      'Devuelve {"summary":"qué y por qué","files":[{"path":"ruta/relativa","content":"contenido completo"}]}')
+            draft = await llm.ask_hard(sys_p, user_p, max_tokens=6000)
+            draft = await llm.refine(sys_p, user_p, draft, max_tokens=6000)
+            data = llm.parse_json(draft) or await llm.ask_json(sys_p, user_p, max_tokens=6000)
             files = [f for f in (data or {}).get("files", []) if isinstance(f, dict) and f.get("path") and "content" in f]
             if not files:
                 feedback = "La respuesta anterior no contenía ficheros válidos."

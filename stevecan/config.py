@@ -3,6 +3,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+_getenv = os.getenv
+
+
+def _env(name, default=""):
+    v = _getenv(name)
+    if v is None:
+        return default
+    v = v.split(" #", 1)[0].strip()
+    return v if v != "" else default
+
+
+os.getenv = _env  # todas las lecturas de este módulo pasan por el saneado
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL", "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf")
@@ -96,3 +108,11 @@ AUTO_TRAIN_EVERY_HOURS = float(os.getenv("AUTO_TRAIN_EVERY_HOURS", "24"))
 LLAMA_CPP_DIR = Path(os.getenv("LLAMA_CPP_DIR")).expanduser().resolve() if os.getenv("LLAMA_CPP_DIR") else None
 for d in (DATASETS_DIR, MODELS_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# Inteligencia: razonamiento en dos pasos, autocrítica, mejor-de-N y embeddings
+REASONING = os.getenv("REASONING", "1") == "1"            # borrador -> crítica -> revisión en tareas difíciles
+BEST_OF = int(os.getenv("BEST_OF", "1"))                  # muestras en paralelo + juez (1 = desactivado)
+LLM_THINK_BASE_URL = os.getenv("LLM_THINK_BASE_URL", "").rstrip("/")   # servidor opcional con modelo *Thinking* para tareas difíciles
+LLM_THINK_MODEL = os.getenv("LLM_THINK_MODEL", "")
+EMBED_BASE_URL = os.getenv("EMBED_BASE_URL", "").rstrip("/")           # llama-server --embeddings (p. ej. Qwen3-Embedding-0.6B)
+EMBED_MODEL = os.getenv("EMBED_MODEL", "embedding")

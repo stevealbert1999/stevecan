@@ -11,6 +11,10 @@ for svc in stevecan-llama stevecan-agents stevecan-api; do
   sed -e "s#__ROOT__#$ROOT#g" -e "s#__USER__#$USER_NAME#g" "systemd/$svc.service" \
     | sudo tee "/etc/systemd/system/$svc.service" >/dev/null
 done
+if grep -qE '^EMBED_GGUF=.+' .env; then
+  sed -e "s#__ROOT__#$ROOT#g" -e "s#__USER__#$USER_NAME#g" systemd/stevecan-embed.service | sudo tee /etc/systemd/system/stevecan-embed.service >/dev/null
+  sudo systemctl daemon-reload && sudo systemctl enable --now stevecan-embed
+fi
 sudo systemctl daemon-reload
 sudo systemctl enable --now stevecan-llama stevecan-agents stevecan-api
 sudo systemctl status --no-pager stevecan-llama stevecan-agents stevecan-api

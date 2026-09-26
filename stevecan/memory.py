@@ -58,6 +58,15 @@ CREATE TRIGGER IF NOT EXISTS s_ad AFTER DELETE ON skills_lib BEGIN
 CREATE TRIGGER IF NOT EXISTS s_au AFTER UPDATE ON skills_lib BEGIN
   INSERT INTO skills_fts(skills_fts, rowid, name, description, content) VALUES('delete', old.id, old.name, old.description, old.content);
   INSERT INTO skills_fts(rowid, name, description, content) VALUES (new.id, new.name, new.description, new.content); END;
+CREATE TABLE IF NOT EXISTS lessons(
+  id INTEGER PRIMARY KEY, agent TEXT, domain TEXT, lesson TEXT NOT NULL, evidence TEXT, weight REAL DEFAULT 1.0, created REAL);
+CREATE VIRTUAL TABLE IF NOT EXISTS lessons_fts USING fts5(domain, lesson, content='lessons', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS l_ai AFTER INSERT ON lessons BEGIN
+  INSERT INTO lessons_fts(rowid, domain, lesson) VALUES (new.id, new.domain, new.lesson); END;
+CREATE TRIGGER IF NOT EXISTS l_ad AFTER DELETE ON lessons BEGIN
+  INSERT INTO lessons_fts(lessons_fts, rowid, domain, lesson) VALUES('delete', old.id, old.domain, old.lesson); END;
+CREATE TABLE IF NOT EXISTS embeddings(
+  kind TEXT NOT NULL, ref INTEGER NOT NULL, vec BLOB NOT NULL, created REAL, PRIMARY KEY(kind, ref));
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, agent TEXT, kind TEXT, detail TEXT, created REAL);
 """)
@@ -224,6 +233,60 @@ def search_skills(query, limit=8):
         "SELECT s.id, s.key, s.name, s.source, s.path, s.description, substr(s.content,1,4000) content "
         "FROM skills_fts f JOIN skills_lib s ON s.id=f.rowid WHERE skills_fts MATCH ? "
         "ORDER BY bm25(skills_fts, 5.0, 3.0, 1.0) LIMIT ?", (q, limit))]
+
+
+# ---- lecciones (aprender de los errores) ----------------------------------
+def add_lesson(agent, domain, lesson, evidence=""):
+    dup = _q("SELECT id FROM lessons WHERE lesson=?", (lesson.strip(),)).fetchone()
+    if dup:
+        _q("UPDATE lessons SET weight=weight+1 WHERE id=?", (dup["id"],))
+        return dup["id"]
+    return _q("INSERT INTO lessons(agent,domain,lesson,evidence,created) VALUES(?,?,?,?,?)",
+              (agent, domain, lesson.strip(), evidence[:2000], time.time())).lastrowid
+
+
+def top_lessons(query, limit=5):
+    q = " OR ".join(f'"{w}"' for w in query.replace('"', " ").split()[:12])
+    rows_ = []
+    if q:
+        rows_ = [dict(r) for r in _q(
+            "SELECT l.* FROM lessons_fts f JOIN lessons l ON l.id=f.rowid WHERE lessons_fts MATCH ? "
+            "ORDER BY bm25(lessons_fts) LIMIT ?", (q, limit))]
+    if len(rows_) < limit:
+        seen = {r["id"] for r in rows_}
+        rows_ += [dict(r) for r in _q("SELECT * FROM lessons ORDER BY weight DESC, id DESC LIMIT ?", (limit,)) if r["id"] not in seen][:limit - len(rows_)]
+    return rows_
+
+
+# ---- embeddings -------------------------------------------------------------
+def embedding_pending(limit=200):
+    out = []
+    for r in _q("SELECT k.id, k.topic, k.content FROM knowledge k LEFT JOIN embeddings e ON e.kind='knowledge' AND e.ref=k.id "
+                "WHERE e.ref IS NULL LIMIT ?", (limit,)):
+        out.append({"kind": "knowledge", "ref": r["id"], "text": f"{r['topic']}\n{r['content']}"})
+    for r in _q("SELECT c.id, c.path, c.content FROM code_chunks c LEFT JOIN embeddings e ON e.kind='code' AND e.ref=c.id "
+                "WHERE e.ref IS NULL LIMIT ?", (max(0, limit - len(out)),)):
+        out.append({"kind": "code", "ref": r["id"], "text": f"{r['path']}\n{r['content']}"})
+    for r in _q("SELECT s.id, s.name, s.description, s.content FROM skills_lib s LEFT JOIN embeddings e ON e.kind='skill' AND e.ref=s.id "
+                "WHERE e.ref IS NULL LIMIT ?", (max(0, limit - len(out)),)):
+        out.append({"kind": "skill", "ref": r["id"], "text": f"{r['name']}\n{r['description']}\n{r['content'][:3000]}"})
+    return out
+
+
+def set_embedding(kind, ref, vec):
+    _q("INSERT OR REPLACE INTO embeddings(kind,ref,vec,created) VALUES(?,?,?,?)", (kind, ref, vec, time.time()))
+
+
+def embeddings_of(kind):
+    return _q("SELECT ref, vec FROM embeddings WHERE kind=?", (kind,)).fetchall()
+
+
+def by_ids(table, ids):
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    rows_ = {r["id"]: dict(r) for r in _q(f"SELECT * FROM {table} WHERE id IN ({marks})", tuple(ids))}
+    return [rows_[i] for i in ids if i in rows_]
 
 
 def rows(sql, args=()):

@@ -101,6 +101,17 @@ Entrenar el 30B en CPU no es viable (semanas por época). Lo que sí funciona y 
    (`DRAFT_GGUF=` en `.env`): decodificación especulativa, 1.5-3x más tokens/s con la misma calidad del 30B, más `--cache-reuse`
    para no reprocesar prompts repetidos. `THREADS` fija los hilos de CPU.
 
+## Inteligencia: cómo aciertan más
+- **Razonar antes de responder** (`REASONING=1`): en tareas difíciles (código, mejoras, respuestas) el modelo razona paso a paso y
+  luego da la respuesta; con `LLM_THINK_BASE_URL` usa un segundo servidor con el modelo *Thinking* de Qwen3.
+- **Autocrítica**: un revisor busca errores concretos en el borrador y se corrige antes de entregar.
+- **Mejor-de-N** (`BEST_OF=3`): varios candidatos en paralelo (usa los slots libres) y un juez elige.
+- **Verificación ejecutando**: si una respuesta trae código Python, se ejecuta de verdad y se corrige si falla.
+- **Recuperación híbrida**: cada consulta se reformula (3 variantes, una en inglés) y se busca por FTS5 y, si hay `EMBED_BASE_URL`,
+  por embeddings, fusionando rankings (RRF).
+- **Lecciones aprendidas**: cada fallo real (kata que no pasa, mejora descartada, hecho falso) se convierte en una lección
+  reutilizable que se inyecta en las tareas siguientes.
+
 ## Mejorar a tus agentes con lo aprendido
 - `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.
 - `data/proposals/*.md`: mejoras propuestas por `reviewer` para `stevecan/*.py`, con diff. Se aplican a mano tras revisarlas.

@@ -11,6 +11,7 @@ from .ingest import index_dir
 from . import developer
 from . import skills as skills_lib
 from . import docs as docs_lib
+from . import embed
 
 SEED_TOPICS = [
     "matemáticas avanzadas", "física", "programación en Python", "algoritmos y estructuras de datos",
@@ -136,6 +137,7 @@ class Critic(Agent):
         conf = float(data.get("confidence", k["confidence"]))
         if v == "delete":
             memory.delete_knowledge(kid)
+            await self.learn_from_failure(k["topic"], "un hecho extraído resultó falso o no respaldado por su fuente", data.get("reason", ""))
         elif v == "fix" and data.get("fixed_content"):
             memory.update_knowledge(kid, content=data["fixed_content"], confidence=conf, verified=True)
         else:
@@ -166,7 +168,7 @@ class Coder(Agent):
                 "Eres un programador que aprende experimentando. Escribe un script Python autocontenido "
                 "(solo librería estándar) que demuestre o compruebe algo concreto del tema, imprimiendo resultados.",
                 f"Tema: {topic}\nConocimiento previo:\n{known}\n{feedback}\n"
-                'Devuelve {"goal":"qué se comprueba","code":"..."}' + self.skills(topic, 2), max_tokens=2000)
+                'Devuelve {"goal":"qué se comprueba","code":"..."}' + self.skills(topic, 2) + self.lessons(topic), max_tokens=2000)
             if not data or not data.get("code"):
                 continue
             code = data["code"]
@@ -176,6 +178,7 @@ class Coder(Agent):
             feedback = f"Intento anterior falló:\n{result['stderr'][-1500:]}\nCorrígelo."
         if not result.get("ok"):
             memory.finish_task(task["id"], result.get("stderr", "sin código"), "failed")
+            await self.learn_from_failure(topic, "experimento de código falló en 3 intentos", result.get("stderr", ""))
             return f"{topic}: código fallido"
         summary = await llm.ask(
             "Resume en 2-4 frases qué demuestra este experimento y qué se aprendió. Solo hechos derivados de la salida.",
@@ -312,6 +315,10 @@ class Librarian(Agent):
             self.log.info("biblioteca de skills: %s", res)
             docs = await loop.run_in_executor(None, docs_lib.sync)
             self.log.info("documentación oficial: %d fuentes, %s", len(docs), memory.code_stats())
+        if embed.enabled():
+            emb = await embed.index_missing(300)
+            if emb:
+                self.log.info("embeddings calculados: %d", emb)
         if not config.CODE_DIRS:
             return None
         indexed = 0
@@ -405,9 +412,9 @@ class Trainer(Agent):
         (kdir / "STATEMENT.md").write_text(kata["statement"], encoding="utf-8")
         t0, passed, feedback = time.time(), False, ""
         for attempt in range(1, 4):
-            sol = await llm.ask("Eres un programador experto y rápido. Devuelve SOLO el código Python de solution.py, sin explicaciones ni markdown.",
-                                f"{kata['statement']}\n\nTests:\n{kata['tests']}\n{feedback}" + self.skills(kata.get("title", domain), 2, 1000),
-                                temperature=0.2, max_tokens=1500)
+            sol = await llm.ask_hard("Eres un programador experto y rápido. Devuelve SOLO el código Python de solution.py, sin explicaciones ni markdown.",
+                                     f"{kata['statement']}\n\nTests:\n{kata['tests']}\n{feedback}" + self.skills(kata.get("title", domain), 2, 1000)
+                                     + self.lessons(kata.get("title", domain)), temperature=0.2, max_tokens=1500)
             sol = re.sub(r"^```(?:python)?\s*|\s*```$", "", sol.strip(), flags=re.S)
             (kdir / "solution.py").write_text(sol, encoding="utf-8")
             res = await tools.run_python_in(kdir, ["-m", "unittest", "-q", "test_solution"])
@@ -421,6 +428,7 @@ class Trainer(Agent):
         if not passed:
             memory.add_task("research", {"topic": f"{kata.get('title', '')} (kata fallida) [{domain[:20]}]", "area": domain},
                             self.name, priority=3)
+            await self.learn_from_failure(domain, f"kata '{kata.get('title', '')}' no pasó los tests en 3 intentos", feedback)
         return f"kata {'OK' if passed else 'FALLIDA'} ({domain[:25]}, dif {difficulty}, {secs:.0f}s, {attempt} intento/s)"
 
 
@@ -507,6 +515,8 @@ class Developer(Agent):
         else:
             return None
         r = await developer.improve(project, instr, self.name)
+        if not r["ok"] and r.get("reason"):
+            await self.learn_from_failure(project.name, f"mejora descartada: {instr[:100]}", r["reason"])
         if task:
             memory.finish_task(task["id"], json.dumps(r, ensure_ascii=False, default=str)[:3000], "done" if r["ok"] else "failed")
         return f"{project.name}: {'OK' if r['ok'] else 'descartada'} -> {instr[:70]}"
