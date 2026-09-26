@@ -26,12 +26,11 @@ for d in (DATA_DIR, WORKSPACE_DIR, NOTES_DIR):
 CODE_DIRS = [Path(p).expanduser().resolve() for p in os.getenv("CODE_DIRS", "").split(":") if p.strip()]
 
 # Dominios en los que habrá un agente experto dedicado (separados por ';')
-EXPERT_DOMAINS = [d.strip() for d in os.getenv(
-    "EXPERT_DOMAINS",
+_DEFAULT_DOMAINS = (
     "ingeniería de software y arquitectura;sistemas embebidos, microcontroladores y bus CAN;"
     "electrónica y electricidad;redes, Linux y ciberseguridad;ciencia de datos y aprendizaje automático;"
-    "matemáticas y física aplicadas;DevOps, cloud y contenedores;mecánica, automoción y diagnosis"
-).split(";") if d.strip()]
+    "matemáticas y física aplicadas;DevOps, cloud y contenedores;mecánica, automoción y diagnosis")
+EXPERT_DOMAINS = [d.strip() for d in (os.getenv("EXPERT_DOMAINS") or _DEFAULT_DOMAINS).split(";") if d.strip()]
 SKILLS_DIR = DATA_DIR / "skills"
 PROPOSALS_DIR = DATA_DIR / "proposals"
 KATAS_DIR = WORKSPACE_DIR / "katas"
