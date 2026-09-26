@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from . import config, llm, memory, tools
 from .agent import Agent
+from .ingest import index_dir
 
 SEED_TOPICS = [
     "matemáticas avanzadas", "física", "programación en Python", "algoritmos y estructuras de datos",
@@ -146,6 +147,10 @@ class Coder(Agent):
             return None
         topic = task["payload"]["topic"]
         known = _ctx(memory.search(topic))
+        own = memory.search_code(topic, 4)
+        if own:
+            known += "\nCódigo propio relacionado:\n" + "\n".join(
+                f"[{c['repo']}/{c['path']}:{c['start_line']}]\n{c['content'][:800]}" for c in own)
         code, result = "", {}
         feedback = ""
         for attempt in range(3):
@@ -282,4 +287,37 @@ class Orchestrator(Agent):
         return f"modelo={'OK' if ok else 'CAÍDO'} conocimiento={st['knowledge']} verificados={st['verified']} pendientes={st['pending']}"
 
 
-ALL_AGENTS = [Curriculum, Researcher, Critic, Coder, Synthesizer, Examiner, Curator, Orchestrator]
+# 9 -----------------------------------------------------------------------
+class Librarian(Agent):
+    """Conoce tu código: reindexa CODE_DIRS cuando cambian y resume cada fichero en la memoria."""
+    name = "librarian"
+    interval = config.CYCLE_SECONDS * 3
+
+    async def step(self):
+        if not config.CODE_DIRS:
+            return None
+        indexed = 0
+        for d in config.CODE_DIRS:
+            if d.is_dir():
+                indexed += index_dir(d)["indexed"]
+            else:
+                self.log.warning("CODE_DIRS: %s no existe", d)
+        done = 0
+        for f in memory.code_files_without_summary(limit=4):
+            text = memory.code_file_text(f["repo"], f["path"])[:12000]
+            summary = await llm.ask(
+                "Resume este fichero de código para un índice del proyecto: propósito, funciones/clases clave, "
+                "dependencias y cómo se usa. 3-6 frases, solo lo que está en el código.",
+                f"Fichero: {f['repo']}/{f['path']}\n\n{text}", max_tokens=400, temperature=0.2)
+            memory.set_code_summary(f["repo"], f["path"], summary)
+            kid = memory.add_knowledge(f"código:{f['repo']}", f"{f['path']}: {summary}",
+                                       f"file://{f['repo']}/{f['path']}", self.name, confidence=0.85)
+            memory.update_knowledge(kid, verified=True)
+            done += 1
+        if done:
+            for repo in {f["repo"] for f in memory.rows("SELECT DISTINCT repo FROM code_files")}:
+                memory.add_task("synthesize", {"topic": f"código:{repo}"}, self.name, priority=6)
+        return f"ficheros reindexados={indexed} resumidos={done} {memory.code_stats()}" if (indexed or done) else None
+
+
+ALL_AGENTS = [Curriculum, Researcher, Critic, Coder, Synthesizer, Examiner, Curator, Orchestrator, Librarian]

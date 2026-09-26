@@ -31,6 +31,18 @@ CREATE INDEX IF NOT EXISTS tasks_kind_status ON tasks(kind, status, priority);
 CREATE TABLE IF NOT EXISTS exams(
   id INTEGER PRIMARY KEY, topic TEXT, question TEXT, expected TEXT,
   answer TEXT, score REAL, created REAL);
+CREATE TABLE IF NOT EXISTS code_chunks(
+  id INTEGER PRIMARY KEY, repo TEXT NOT NULL, path TEXT NOT NULL, chunk INTEGER NOT NULL,
+  start_line INTEGER, end_line INTEGER, content TEXT NOT NULL, sha TEXT, updated REAL);
+CREATE UNIQUE INDEX IF NOT EXISTS code_chunks_key ON code_chunks(repo, path, chunk);
+CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(
+  path, content, content='code_chunks', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS c_ai AFTER INSERT ON code_chunks BEGIN
+  INSERT INTO code_fts(rowid, path, content) VALUES (new.id, new.path, new.content); END;
+CREATE TRIGGER IF NOT EXISTS c_ad AFTER DELETE ON code_chunks BEGIN
+  INSERT INTO code_fts(code_fts, rowid, path, content) VALUES('delete', old.id, old.path, old.content); END;
+CREATE TABLE IF NOT EXISTS code_files(
+  repo TEXT NOT NULL, path TEXT NOT NULL, sha TEXT, summary TEXT, updated REAL, PRIMARY KEY(repo, path));
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, agent TEXT, kind TEXT, detail TEXT, created REAL);
 """)
@@ -117,6 +129,59 @@ def search(query, limit=8):
         "ORDER BY bm25(knowledge_fts) LIMIT ?", (q, limit))]
 
 
+# ---- código propio -------------------------------------------------------
+def code_file_sha(repo, path):
+    r = _q("SELECT sha FROM code_files WHERE repo=? AND path=?", (repo, path)).fetchone()
+    return r["sha"] if r else None
+
+
+def replace_code_file(repo, path, sha, chunks):
+    """chunks: lista de (start_line, end_line, content). Sustituye el fichero completo."""
+    with _lock:
+        _q("DELETE FROM code_chunks WHERE repo=? AND path=?", (repo, path))
+        for i, (a, b, content) in enumerate(chunks):
+            _q("INSERT INTO code_chunks(repo,path,chunk,start_line,end_line,content,sha,updated) VALUES(?,?,?,?,?,?,?,?)",
+               (repo, path, i, a, b, content, sha, time.time()))
+        _q("INSERT INTO code_files(repo,path,sha,summary,updated) VALUES(?,?,?,NULL,?) "
+           "ON CONFLICT(repo,path) DO UPDATE SET sha=excluded.sha, summary=NULL, updated=excluded.updated",
+           (repo, path, sha, time.time()))
+
+
+def remove_code_files_not_in(repo, keep_paths):
+    with _lock:
+        for r in _q("SELECT path FROM code_files WHERE repo=?", (repo,)).fetchall():
+            if r["path"] not in keep_paths:
+                _q("DELETE FROM code_chunks WHERE repo=? AND path=?", (repo, r["path"]))
+                _q("DELETE FROM code_files WHERE repo=? AND path=?", (repo, r["path"]))
+
+
+def set_code_summary(repo, path, summary):
+    _q("UPDATE code_files SET summary=? WHERE repo=? AND path=?", (summary, repo, path))
+
+
+def code_files_without_summary(limit=5):
+    return [dict(r) for r in _q("SELECT repo, path FROM code_files WHERE summary IS NULL ORDER BY updated LIMIT ?", (limit,))]
+
+
+def code_file_text(repo, path):
+    return "\n".join(r["content"] for r in
+                     _q("SELECT content FROM code_chunks WHERE repo=? AND path=? ORDER BY chunk", (repo, path)))
+
+
+def search_code(query, limit=8):
+    q = " OR ".join(f'"{w}"' for w in query.replace('"', " ").split()[:12])
+    if not q:
+        return []
+    return [dict(r) for r in _q(
+        "SELECT c.* FROM code_fts f JOIN code_chunks c ON c.id=f.rowid WHERE code_fts MATCH ? "
+        "ORDER BY bm25(code_fts) LIMIT ?", (q, limit))]
+
+
+def code_stats():
+    return {r["repo"]: {"files": r["files"], "summarized": r["summarized"]} for r in _q(
+        "SELECT repo, COUNT(*) files, SUM(summary IS NOT NULL) summarized FROM code_files GROUP BY repo")}
+
+
 def rows(sql, args=()):
     return [dict(r) for r in _q(sql, args)]
 
@@ -129,4 +194,5 @@ def stats():
         "exams": _q("SELECT COUNT(*) n, AVG(score) avg FROM exams").fetchone()["n"],
         "exam_avg": _q("SELECT AVG(score) avg FROM exams").fetchone()["avg"],
         "pending": pending_counts(),
+        "code": code_stats(),
     }

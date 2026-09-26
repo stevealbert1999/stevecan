@@ -21,3 +21,6 @@ LOG_PATH = DATA_DIR / "agents.log"
 
 for d in (DATA_DIR, WORKSPACE_DIR, NOTES_DIR):
     d.mkdir(parents=True, exist_ok=True)
+
+# Directorios de código propio que los agentes deben conocer (separados por ':')
+CODE_DIRS = [Path(p).expanduser().resolve() for p in os.getenv("CODE_DIRS", "").split(":") if p.strip()]

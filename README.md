@@ -1,4 +1,4 @@
-# stevecan — 8 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
+# stevecan — 9 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
 
 Todos los agentes comparten un único `llama-server` con 8 slots paralelos y batching continuo:
 sin límites de peticiones ni de tokens más allá de tu hardware.
@@ -13,6 +13,7 @@ sin límites de peticiones ni de tokens más allá de tu hardware.
 | examiner | examina al modelo sin contexto y detecta huecos |
 | curator | limpia duplicados, baja confianza, tareas atascadas |
 | orchestrator | vigila el modelo y escribe `data/status.json` |
+| librarian | indexa y resume **tu código** (`CODE_DIRS`) para que los agentes lo conozcan |
 
 ## Requisitos
 - `llama-server` (llama.cpp) en el PATH, o Docker con GPU NVIDIA.
@@ -38,11 +39,21 @@ python -m stevecan
 ```
 Con Ollama o LM Studio: pon `LLM_BASE_URL` (p. ej. `http://127.0.0.1:11434/v1`) y `LLM_MODEL` con el nombre que muestre `ollama list`; en Ollama sube `OLLAMA_NUM_PARALLEL=8`.
 
+## Que el agente conozca tu código
+El modelo no memoriza código por sí solo: se le entrega por recuperación (RAG) en cada consulta. Índice FTS5 en SQLite, sin embeddings externos.
+```bash
+CODE_DIRS=/ruta/proyecto1:/ruta/proyecto2     # en .env; el agente librarian lo reindexa solo al cambiar
+python -m stevecan.ingest /ruta/proyecto      # indexación manual inmediata
+python -m stevecan.ask "¿dónde se inicializa el bus CAN y con qué bitrate?"
+```
+`ask` responde citando ruta y líneas. Los agentes `coder` y `synthesizer` usan el mismo índice. Fine-tuning (LoRA) no es necesario para esto y funciona peor para hechos concretos.
+
 ## Datos
 - `data/stevecan.db` — conocimiento, tareas, exámenes, eventos (SQLite FTS5)
 - `data/notes/*.md` — notas de estudio
 - `data/workspace/*.py` — experimentos ejecutados
 - `data/status.json` — estado del sistema
+- tablas `code_chunks` / `code_files` — índice de tu código
 
 ## Búsqueda web ilimitada
 Los buscadores públicos bloquean tráfico automatizado con el tiempo. `docker compose` levanta un SearXNG propio
