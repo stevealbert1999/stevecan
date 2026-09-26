@@ -27,9 +27,29 @@ CODE_DIRS = [Path(p).expanduser().resolve() for p in os.getenv("CODE_DIRS", "").
 
 # Dominios en los que habrá un agente experto dedicado (separados por ';')
 _DEFAULT_DOMAINS = (
-    "ingeniería de software y arquitectura;sistemas embebidos, microcontroladores y bus CAN;"
-    "electrónica y electricidad;redes, Linux y ciberseguridad;ciencia de datos y aprendizaje automático;"
-    "matemáticas y física aplicadas;DevOps, cloud y contenedores;mecánica, automoción y diagnosis")
+    # Sistemas operativos
+    "Linux: administración, kernel, systemd, shell y rendimiento;"
+    "macOS: sistema, Homebrew, launchd, Swift/Objective-C y herramientas de desarrollo;"
+    "Windows: administración, PowerShell, WSL, registro y desarrollo Win32/.NET;"
+    # Lenguajes de programación
+    "Python: lenguaje, librería estándar, asyncio, empaquetado y buenas prácticas;"
+    "JavaScript y TypeScript: lenguaje, Node.js, navegador, frameworks y tooling;"
+    "C y C++: lenguaje moderno, memoria, STL, CMake, rendimiento y sistemas;"
+    "Java y JVM: lenguaje, Spring, concurrencia, Maven/Gradle y Kotlin;"
+    "C# y .NET: lenguaje, ASP.NET, Entity Framework y ecosistema;"
+    "Go: lenguaje, concurrencia, herramientas y servicios;"
+    "Rust: ownership, async, cargo y sistemas seguros;"
+    "PHP, Ruby y Perl: lenguajes, frameworks web (Laravel, Rails) y scripting;"
+    "Swift y Kotlin: desarrollo móvil iOS/Android;"
+    "SQL y bases de datos: PostgreSQL, MySQL, SQLite, NoSQL, modelado y optimización;"
+    "Shell scripting: Bash, Zsh, PowerShell, sed/awk y automatización;"
+    # Paradigmas y modelos de programación
+    "paradigmas: orientado a objetos, funcional, reactivo, lógico y concurrente;"
+    "algoritmos, estructuras de datos y complejidad;"
+    "patrones de diseño, arquitectura de software y sistemas distribuidos;"
+    "testing, TDD, depuración y calidad de código;"
+    "web: HTML, CSS, HTTP, REST, GraphQL, seguridad web y navegadores;"
+    "DevOps: Git, CI/CD, Docker, Kubernetes y cloud")
 EXPERT_DOMAINS = [d.strip() for d in (os.getenv("EXPERT_DOMAINS") or _DEFAULT_DOMAINS).split(";") if d.strip()]
 SKILLS_DIR = DATA_DIR / "skills"
 PROPOSALS_DIR = DATA_DIR / "proposals"
