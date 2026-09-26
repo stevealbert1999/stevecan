@@ -47,3 +47,28 @@ Con Ollama o LM Studio: pon `LLM_BASE_URL` (p. ej. `http://127.0.0.1:11434/v1`) 
 ## Búsqueda web ilimitada
 Los buscadores públicos bloquean tráfico automatizado con el tiempo. `docker compose` levanta un SearXNG propio
 (`searxng/settings.yml`, cambia `secret_key`) y los agentes lo usan vía `SEARXNG_URL`. Sin él, se usa DuckDuckGo y Bing como respaldo.
+
+## Ejecutar los agentes desde GitHub (Actions)
+GitHub no tiene GPU: el modelo siempre corre en tu PC. GitHub solo orquesta. Workflow: `.github/workflows/agents.yml`
+(ejecuciones de 340 min que se reencadenan solas + cron cada 6 h como red de seguridad; el estado se guarda en la rama `agents-data`).
+
+**Modo A — runner self-hosted (recomendado):** tu PC ejecuta los jobs con el modelo local.
+```bash
+./scripts/install.sh                          # llama-server + agentes locales
+RUNNER_TOKEN=<token> ./scripts/gh_runner.sh   # token: Settings > Actions > Runners > New self-hosted runner
+```
+Luego Actions → `agents` → *Run workflow*. Variable de repo `AGENTS_RUNNER` vacía o `self-hosted`.
+
+**Modo B — runners de GitHub + túnel al modelo:**
+```bash
+cloudflared tunnel --url http://localhost:8080   # o ngrok http 8080
+```
+Secreto de repo `LLM_BASE_URL=https://<tu-tunel>/v1`, variable `AGENTS_RUNNER=github`. Cada job levanta su propio SearXNG.
+
+Nota: `schedule` y el botón *Run workflow* solo aparecen cuando el workflow está en la rama por defecto (`main`).
+
+## Skills de Claude Code incluidos
+`.claude/skills/` trae vendorizados **superpowers** (obra/superpowers), **agent-skill** (anthropics/skills, solo los Apache 2.0)
+y **fin-skills** (intercom/2x-skills). En una sesión de Claude Code sobre este repo: `/superpowers`, `/agent-skill`, `/fin-skills`
+muestran el índice y cada skill se invoca por su nombre (`/brainstorming`, `/secure-github-actions`, `/mcp-builder`, …).
+El hook de `.claude/settings.json` activa `using-superpowers` al iniciar la sesión. Detalle y licencias: `.claude/skills/THIRD_PARTY.md`.

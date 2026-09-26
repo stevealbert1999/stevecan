@@ -23,7 +23,7 @@ services:
               count: all
               capabilities: [gpu]
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.9.25-12f8b6515
     restart: unless-stopped
     volumes:
       - ./searxng:/etc/searxng
