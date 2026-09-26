@@ -3,30 +3,30 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
-_getenv = os.getenv
 
 
-def _env(name, default=""):
-    v = _getenv(name)
+def _env(name, default=None):
+    """getenv saneado: recorta espacios y comentarios inline ('VALOR # nota' o '# nota' = vacío)."""
+    v = os.environ.get(name)
     if v is None:
         return default
+    v = v.strip()
+    if v.startswith("#"):
+        v = ""
     v = v.split(" #", 1)[0].strip()
     return v if v != "" else default
 
+LLM_BASE_URL = _env("LLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
+LLM_MODEL = _env("LLM_MODEL", "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf")
+LLM_API_KEY = _env("LLM_API_KEY", "none")
+LLM_PARALLEL = int(_env("LLM_PARALLEL", "8"))
+LLM_MAX_TOKENS = int(_env("LLM_MAX_TOKENS", "2048"))
+LLM_TEMPERATURE = float(_env("LLM_TEMPERATURE", "0.6"))
+SEARXNG_URL = _env("SEARXNG_URL", "").strip()
+CYCLE_SECONDS = float(_env("CYCLE_SECONDS", "20"))
 
-os.getenv = _env  # todas las lecturas de este módulo pasan por el saneado
-
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1").rstrip("/")
-LLM_MODEL = os.getenv("LLM_MODEL", "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "none")
-LLM_PARALLEL = int(os.getenv("LLM_PARALLEL", "8"))
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2048"))
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.6"))
-SEARXNG_URL = os.getenv("SEARXNG_URL", "").strip()
-CYCLE_SECONDS = float(os.getenv("CYCLE_SECONDS", "20"))
-
-DATA_DIR = Path(os.getenv("DATA_DIR", "./data")).resolve()
-WORKSPACE_DIR = Path(os.getenv("WORKSPACE_DIR", str(DATA_DIR / "workspace"))).resolve()
+DATA_DIR = Path(_env("DATA_DIR", "./data")).resolve()
+WORKSPACE_DIR = Path(_env("WORKSPACE_DIR", str(DATA_DIR / "workspace"))).resolve()
 NOTES_DIR = DATA_DIR / "notes"
 DB_PATH = DATA_DIR / "stevecan.db"
 LOG_PATH = DATA_DIR / "agents.log"
@@ -35,7 +35,7 @@ for d in (DATA_DIR, WORKSPACE_DIR, NOTES_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # Directorios de código propio que los agentes deben conocer (separados por ':')
-CODE_DIRS = [Path(p).expanduser().resolve() for p in os.getenv("CODE_DIRS", "").split(":") if p.strip()]
+CODE_DIRS = [Path(p).expanduser().resolve() for p in _env("CODE_DIRS", "").split(":") if p.strip()]
 
 # Dominios en los que habrá un agente experto dedicado (separados por ';')
 _DEFAULT_DOMAINS = (
@@ -66,7 +66,7 @@ _DEFAULT_DOMAINS = (
     "redes sociales: APIs (Meta, X, TikTok, YouTube, Telegram, Discord), bots, automatización y analítica;"
     "Android: Kotlin/Java, Gradle, SDK, APK, arquitectura de apps y publicación;"
     "sistemas operativos: diseño de SO, kernels, bootloaders, drivers, distribuciones y empaquetado")
-EXPERT_DOMAINS = [d.strip() for d in (os.getenv("EXPERT_DOMAINS") or _DEFAULT_DOMAINS).split(";") if d.strip()]
+EXPERT_DOMAINS = [d.strip() for d in (_env("EXPERT_DOMAINS") or _DEFAULT_DOMAINS).split(";") if d.strip()]
 SKILLS_DIR = DATA_DIR / "skills"
 PROPOSALS_DIR = DATA_DIR / "proposals"
 KATAS_DIR = WORKSPACE_DIR / "katas"
@@ -74,11 +74,11 @@ for d in (SKILLS_DIR, PROPOSALS_DIR, KATAS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # Proyectos que los agentes mejoran (separados por ':'), p. ej. Astur OS y Astur APK
-PROJECT_DIRS = [Path(p).expanduser().resolve() for p in os.getenv("PROJECT_DIRS", "").split(":") if p.strip()]
-AUTO_IMPROVE = os.getenv("AUTO_IMPROVE", "1") == "1"   # el agente developer busca mejoras por sí solo
-AUTO_APPLY = os.getenv("AUTO_APPLY", "0") == "1"       # 1 = fusiona mejoras aprobadas por los tests en tu rama; 0 = deja rama stevecan/* para revisar
-BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "30"))
-MAX_CHANGE_LINES = int(os.getenv("MAX_CHANGE_LINES", "400"))
+PROJECT_DIRS = [Path(p).expanduser().resolve() for p in _env("PROJECT_DIRS", "").split(":") if p.strip()]
+AUTO_IMPROVE = _env("AUTO_IMPROVE", "1") == "1"   # el agente developer busca mejoras por sí solo
+AUTO_APPLY = _env("AUTO_APPLY", "0") == "1"       # 1 = fusiona mejoras aprobadas por los tests en tu rama; 0 = deja rama stevecan/* para revisar
+BACKUP_KEEP = int(_env("BACKUP_KEEP", "30"))
+MAX_CHANGE_LINES = int(_env("MAX_CHANGE_LINES", "400"))
 SKILLS_LIB_DIR = DATA_DIR / "skills-lib"
 DOCS_LIB_DIR = DATA_DIR / "docs-lib"
 BACKUPS_DIR = DATA_DIR / "backups"
@@ -89,30 +89,30 @@ for d in (BACKUPS_DIR, WORKTREES_DIR, IMPROVEMENTS_DIR):
 CODE_DIRS = list(dict.fromkeys(CODE_DIRS + PROJECT_DIRS))
 
 # API HTTP del sistema unificado
-API_HOST = os.getenv("API_HOST", "0.0.0.0")
-API_PORT = int(os.getenv("API_PORT", "8765"))
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
+API_HOST = _env("API_HOST", "0.0.0.0")
+API_PORT = int(_env("API_PORT", "8765"))
+API_TOKEN = _env("API_TOKEN", "").strip()
 
 # Entrenamiento en CPU (modelo pequeño con LoRA; sirve de borrador especulativo para el 30B)
-DATASETS = [Path(p).expanduser().resolve() for p in os.getenv("DATASETS", "").split(":") if p.strip()]
+DATASETS = [Path(p).expanduser().resolve() for p in _env("DATASETS", "").split(":") if p.strip()]
 DATASETS_DIR = DATA_DIR / "datasets"
 MODELS_DIR = DATA_DIR / "models"
-TRAIN_BASE_MODEL = os.getenv("TRAIN_BASE_MODEL", "Qwen/Qwen3-0.6B")
-TRAIN_STEPS = int(os.getenv("TRAIN_STEPS", "300"))
-TRAIN_MAX_LEN = int(os.getenv("TRAIN_MAX_LEN", "1024"))
-TRAIN_LORA_R = int(os.getenv("TRAIN_LORA_R", "16"))
-TRAIN_THREADS = int(os.getenv("TRAIN_THREADS") or (os.cpu_count() or 4))
-TRAIN_MIN_EXAMPLES = int(os.getenv("TRAIN_MIN_EXAMPLES", "200"))
-AUTO_TRAIN = os.getenv("AUTO_TRAIN", "0") == "1"
-AUTO_TRAIN_EVERY_HOURS = float(os.getenv("AUTO_TRAIN_EVERY_HOURS", "24"))
-LLAMA_CPP_DIR = Path(os.getenv("LLAMA_CPP_DIR")).expanduser().resolve() if os.getenv("LLAMA_CPP_DIR") else None
+TRAIN_BASE_MODEL = _env("TRAIN_BASE_MODEL", "Qwen/Qwen3-0.6B")
+TRAIN_STEPS = int(_env("TRAIN_STEPS", "300"))
+TRAIN_MAX_LEN = int(_env("TRAIN_MAX_LEN", "1024"))
+TRAIN_LORA_R = int(_env("TRAIN_LORA_R", "16"))
+TRAIN_THREADS = int(_env("TRAIN_THREADS") or (os.cpu_count() or 4))
+TRAIN_MIN_EXAMPLES = int(_env("TRAIN_MIN_EXAMPLES", "200"))
+AUTO_TRAIN = _env("AUTO_TRAIN", "0") == "1"
+AUTO_TRAIN_EVERY_HOURS = float(_env("AUTO_TRAIN_EVERY_HOURS", "24"))
+LLAMA_CPP_DIR = Path(_env("LLAMA_CPP_DIR")).expanduser().resolve() if _env("LLAMA_CPP_DIR") else None
 for d in (DATASETS_DIR, MODELS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # Inteligencia: razonamiento en dos pasos, autocrítica, mejor-de-N y embeddings
-REASONING = os.getenv("REASONING", "1") == "1"            # borrador -> crítica -> revisión en tareas difíciles
-BEST_OF = int(os.getenv("BEST_OF", "1"))                  # muestras en paralelo + juez (1 = desactivado)
-LLM_THINK_BASE_URL = os.getenv("LLM_THINK_BASE_URL", "").rstrip("/")   # servidor opcional con modelo *Thinking* para tareas difíciles
-LLM_THINK_MODEL = os.getenv("LLM_THINK_MODEL", "")
-EMBED_BASE_URL = os.getenv("EMBED_BASE_URL", "").rstrip("/")           # llama-server --embeddings (p. ej. Qwen3-Embedding-0.6B)
-EMBED_MODEL = os.getenv("EMBED_MODEL", "embedding")
+REASONING = _env("REASONING", "1") == "1"            # borrador -> crítica -> revisión en tareas difíciles
+BEST_OF = int(_env("BEST_OF", "1"))                  # muestras en paralelo + juez (1 = desactivado)
+LLM_THINK_BASE_URL = _env("LLM_THINK_BASE_URL", "").rstrip("/")   # servidor opcional con modelo *Thinking* para tareas difíciles
+LLM_THINK_MODEL = _env("LLM_THINK_MODEL", "")
+EMBED_BASE_URL = _env("EMBED_BASE_URL", "").rstrip("/")           # llama-server --embeddings (p. ej. Qwen3-Embedding-0.6B)
+EMBED_MODEL = _env("EMBED_MODEL", "embedding")
