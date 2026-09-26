@@ -92,6 +92,24 @@ Los agentes (`developer`, `coder`, `ask`) consultan la biblioteca automáticamen
 Los buscadores públicos bloquean tráfico automatizado con el tiempo. `docker compose` levanta un SearXNG propio
 (`searxng/settings.yml`, cambia `secret_key`) y los agentes lo usan vía `SEARXNG_URL`. Sin él, se usa DuckDuckGo y Bing como respaldo.
 
+## Tu servidor privado (recomendado frente a GitHub)
+```bash
+cp .env.example .env            # GGUF_PATH, PROJECT_DIRS, CODE_DIRS, API_TOKEN…
+./scripts/deploy.sh usuario@servidor          # rsync + install.sh (systemd) + sync de skills
+./scripts/remote.sh usuario@servidor status   # también: logs, restart, ask "…", improve /ruta "…", backups
+```
+Si el modelo corre en otra máquina, pon `LLM_BASE_URL=http://ip-del-servidor:8080/v1` en `.env`.
+
+## Sistema unificado: una sola puerta de entrada
+Todos los agentes comparten memoria y la consulta pasa por `consult`: primero conocimiento verificado + tu código + skills;
+si no basta, **busca en internet**, lee las fuentes, responde citándolas y guarda los hechos (que `critic` verifica después).
+Si tampoco hay fuentes, lo dice y encola la investigación. Nunca inventa.
+```bash
+python -m stevecan.ask "¿cómo firmo un APK con apksigner?"
+python -m stevecan.serve        # API HTTP: GET /status, POST /ask, POST /improve, POST /research, GET /backups, GET /improvements
+curl -s -X POST localhost:8765/ask -H 'Authorization: Bearer TOKEN' -d '{"question":"..."}'
+```
+
 ## Ejecutar los agentes desde GitHub (Actions)
 GitHub no tiene GPU: el modelo siempre corre en tu PC. GitHub solo orquesta. Workflow: `.github/workflows/agents.yml`
 (ejecuciones de 340 min que se reencadenan solas + cron cada 6 h como red de seguridad; el estado se guarda en la rama `agents-data`).

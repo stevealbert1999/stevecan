@@ -74,3 +74,8 @@ IMPROVEMENTS_DIR = DATA_DIR / "improvements"
 for d in (BACKUPS_DIR, WORKTREES_DIR, IMPROVEMENTS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 CODE_DIRS = list(dict.fromkeys(CODE_DIRS + PROJECT_DIRS))
+
+# API HTTP del sistema unificado
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("API_PORT", "8765"))
+API_TOKEN = os.getenv("API_TOKEN", "").strip()

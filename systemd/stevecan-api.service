@@ -1,0 +1,15 @@
+[Unit]
+Description=StevecAN API HTTP del sistema de agentes
+After=stevecan-llama.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__ROOT__
+EnvironmentFile=__ROOT__/.env
+ExecStart=__ROOT__/.venv/bin/python -m stevecan.serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
