@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS code_files(
 CREATE TABLE IF NOT EXISTS katas(
   id INTEGER PRIMARY KEY, domain TEXT, title TEXT, difficulty INTEGER, passed INTEGER,
   seconds REAL, attempts INTEGER, path TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS skills_lib(
+  id INTEGER PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT, source TEXT, path TEXT,
+  description TEXT, content TEXT, sha TEXT, updated REAL);
+CREATE VIRTUAL TABLE IF NOT EXISTS skills_fts USING fts5(
+  name, description, content, content='skills_lib', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS s_ai AFTER INSERT ON skills_lib BEGIN
+  INSERT INTO skills_fts(rowid, name, description, content) VALUES (new.id, new.name, new.description, new.content); END;
+CREATE TRIGGER IF NOT EXISTS s_ad AFTER DELETE ON skills_lib BEGIN
+  INSERT INTO skills_fts(skills_fts, rowid, name, description, content) VALUES('delete', old.id, old.name, old.description, old.content); END;
+CREATE TRIGGER IF NOT EXISTS s_au AFTER UPDATE ON skills_lib BEGIN
+  INSERT INTO skills_fts(skills_fts, rowid, name, description, content) VALUES('delete', old.id, old.name, old.description, old.content);
+  INSERT INTO skills_fts(rowid, name, description, content) VALUES (new.id, new.name, new.description, new.content); END;
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, agent TEXT, kind TEXT, detail TEXT, created REAL);
 """)
@@ -185,6 +197,35 @@ def code_stats():
         "SELECT repo, COUNT(*) files, SUM(summary IS NOT NULL) summarized FROM code_files GROUP BY repo")}
 
 
+# ---- biblioteca de skills ------------------------------------------------
+def skill_sha(key):
+    r = _q("SELECT sha FROM skills_lib WHERE key=?", (key,)).fetchone()
+    return r["sha"] if r else None
+
+
+def upsert_skill(key, name, source, path, description, content, sha):
+    _q("INSERT INTO skills_lib(key,name,source,path,description,content,sha,updated) VALUES(?,?,?,?,?,?,?,?) "
+       "ON CONFLICT(key) DO UPDATE SET name=excluded.name, source=excluded.source, path=excluded.path, "
+       "description=excluded.description, content=excluded.content, sha=excluded.sha, updated=excluded.updated",
+       (key, name, source, path, description, content, sha, time.time()))
+
+
+def remove_skills_not_in(keys):
+    for r in _q("SELECT key FROM skills_lib").fetchall():
+        if r["key"] not in keys:
+            _q("DELETE FROM skills_lib WHERE key=?", (r["key"],))
+
+
+def search_skills(query, limit=8):
+    q = " OR ".join(f'"{w}"' for w in query.replace('"', " ").split()[:12])
+    if not q:
+        return []
+    return [dict(r) for r in _q(
+        "SELECT s.id, s.key, s.name, s.source, s.path, s.description, substr(s.content,1,4000) content "
+        "FROM skills_fts f JOIN skills_lib s ON s.id=f.rowid WHERE skills_fts MATCH ? "
+        "ORDER BY bm25(skills_fts, 5.0, 3.0, 1.0) LIMIT ?", (q, limit))]
+
+
 def rows(sql, args=()):
     return [dict(r) for r in _q(sql, args)]
 
@@ -198,6 +239,7 @@ def stats():
         "exam_avg": _q("SELECT AVG(score) avg FROM exams").fetchone()["avg"],
         "pending": pending_counts(),
         "code": code_stats(),
+        "skills_lib": _q("SELECT COUNT(*) n FROM skills_lib").fetchone()["n"],
         "katas": _q("SELECT COUNT(*) n, AVG(passed) pass_rate, AVG(seconds) avg_s FROM katas").fetchone()["n"],
         "kata_pass_rate": _q("SELECT AVG(passed) r FROM katas").fetchone()["r"],
         "kata_avg_seconds": _q("SELECT AVG(seconds) s FROM katas WHERE passed=1").fetchone()["s"],

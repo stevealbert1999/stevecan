@@ -1,4 +1,4 @@
-# stevecan — 32 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
+# stevecan — 37 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
 
 Todos los agentes comparten un único `llama-server` con 8 slots paralelos y batching continuo:
 sin límites de peticiones ni de tokens más allá de tu hardware.
@@ -17,7 +17,8 @@ sin límites de peticiones ni de tokens más allá de tu hardware.
 | trainer | katas de programación con tests reales contra reloj: mide velocidad y tasa de acierto |
 | skillsmith | convierte lo aprendido en skills `SKILL.md` (`data/skills/`) para tus agentes y Claude Code |
 | reviewer | revisa el código de los propios agentes y deja propuestas con parche en `data/proposals/` |
-| expert × 20 | un experto por dominio (`EXPERT_DOMAINS`): Linux, macOS, Windows, Python, JS/TS, C/C++, Java/JVM, C#/.NET, Go, Rust, PHP/Ruby/Perl, Swift/Kotlin, SQL, shell, paradigmas, algoritmos, arquitectura, testing, web, DevOps |
+| developer | mejora **tus proyectos** (`PROJECT_DIRS`, p. ej. Astur OS y Astur APK) por orden tuya o por iniciativa propia, siempre con backup verificado y tests |
+| expert × 24 | un experto por dominio (`EXPERT_DOMAINS`): Linux, macOS, Windows, Python, JS/TS, C/C++, Java/JVM, C#/.NET, Go, Rust, PHP/Ruby/Perl, Swift/Kotlin, SQL, shell, paradigmas, algoritmos, arquitectura, testing, web, DevOps, bases de datos, redes sociales, Android/APK, sistemas operativos |
 
 ## Requisitos
 - `llama-server` (llama.cpp) en el PATH, o Docker con GPU NVIDIA.
@@ -51,6 +52,29 @@ python -m stevecan.ingest /ruta/proyecto      # indexación manual inmediata
 python -m stevecan.ask "¿dónde se inicializa el bus CAN y con qué bitrate?"
 ```
 `ask` responde citando ruta y líneas. Los agentes `coder` y `synthesizer` usan el mismo índice. Fine-tuning (LoRA) no es necesario para esto y funciona peor para hechos concretos.
+
+## Mejorar tus proyectos sin destrozarlos (developer)
+```bash
+PROJECT_DIRS=/ruta/astur-os:/ruta/astur-apk                     # en .env
+python -m stevecan.developer /ruta/astur-apk "añade validación de entrada en LoginActivity"   # orden tuya (se encola)
+python -m stevecan.developer /ruta/astur-apk "..." --now         # ejecutar ya
+python -m stevecan.projects backup /ruta/astur-os                # backup manual
+python -m stevecan.projects list /ruta/astur-os                  # backups disponibles
+python -m stevecan.projects restore data/backups/astur-os/<ts>.tar.gz   # restaurar (antes guarda el estado actual)
+```
+Cada mejora sigue este orden y se aborta en cuanto algo falla:
+1. **Backup real**: `data/backups/<proyecto>/<ts>.tar.gz`, verificado tras escribirse, más tag git `backup/<ts>`.
+2. **Rama aislada** `stevecan/<ts>` en un worktree aparte: tu directorio de trabajo no se toca.
+3. Cambio pequeño (≤ `MAX_CHANGE_LINES`, ≤ 4 ficheros) → comprobación de sintaxis → **tests del proyecto** (pytest, npm test, gradle, maven, cargo, go, make).
+4. Si pasa: commit en la rama e informe en `data/improvements/`. Con `AUTO_APPLY=1` se fusiona en tu rama (solo si no tienes cambios sin confirmar). Si falla: rama borrada, tu código intacto.
+
+## Biblioteca de skills de GitHub
+```bash
+python -m stevecan.skills sync                   # clona/actualiza las colecciones de skills-sources.txt (≈1.400 skills) e indexa
+python -m stevecan.skills search "android gradle"
+python -m stevecan.skills enable <nombre>        # lo copia a .claude/skills/ para Claude Code
+```
+Los agentes (`developer`, `coder`, `ask`) consultan la biblioteca automáticamente. Añade repos en `skills-sources.txt`.
 
 ## Mejorar a tus agentes con lo aprendido
 - `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.

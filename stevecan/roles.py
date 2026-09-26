@@ -7,6 +7,7 @@ from pathlib import Path
 from . import config, llm, memory, tools
 from .agent import Agent
 from .ingest import index_dir
+from . import developer
 
 SEED_TOPICS = [
     "matemáticas avanzadas", "física", "programación en Python", "algoritmos y estructuras de datos",
@@ -465,11 +466,40 @@ class Reviewer(Agent):
         return f"propuesta escrita: {out.name}"
 
 
+# 14 ----------------------------------------------------------------------
+class Developer(Agent):
+    """Mejora tus proyectos (PROJECT_DIRS): por orden tuyo (tareas 'improve') o por iniciativa propia (AUTO_IMPROVE).
+    Siempre: backup verificado -> rama aislada -> sintaxis + tests -> commit. Nunca rompe tu rama."""
+    name = "developer"
+    interval = config.CYCLE_SECONDS * 2
+
+    async def step(self):
+        task = memory.take_task("improve", self.name)
+        if task:
+            project, instr = Path(task["payload"]["project"]), task["payload"]["instruction"]
+        elif config.AUTO_IMPROVE and config.PROJECT_DIRS:
+            n = memory.rows("SELECT COUNT(*) n FROM events WHERE agent='developer' AND kind='improve'")[0]["n"]
+            project = config.PROJECT_DIRS[n % len(config.PROJECT_DIRS)]
+            if not project.is_dir():
+                self.log.warning("PROJECT_DIRS: %s no existe", project)
+                return None
+            index_dir(project)
+            instr = await developer.propose_goal(project)
+            if not instr:
+                return None
+        else:
+            return None
+        r = await developer.improve(project, instr, self.name)
+        if task:
+            memory.finish_task(task["id"], json.dumps(r, ensure_ascii=False, default=str)[:3000], "done" if r["ok"] else "failed")
+        return f"{project.name}: {'OK' if r['ok'] else 'descartada'} -> {instr[:70]}"
+
+
 def build_agents():
     base = [Curriculum(), Researcher(), Critic(), Coder(), Synthesizer(), Examiner(), Curator(), Orchestrator(),
-            Librarian(), Trainer(), Skillsmith(), Reviewer()]
+            Librarian(), Trainer(), Skillsmith(), Reviewer(), Developer()]
     return base + [Expert(d) for d in config.EXPERT_DOMAINS]
 
 
 ALL_AGENTS = [Curriculum, Researcher, Critic, Coder, Synthesizer, Examiner, Curator, Orchestrator, Librarian,
-              Trainer, Skillsmith, Reviewer]
+              Trainer, Skillsmith, Reviewer, Developer]
