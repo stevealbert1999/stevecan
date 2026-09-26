@@ -1,0 +1,43 @@
+services:
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    volumes:
+      - ${GGUF_DIR:-/models}:/models:ro
+    environment:
+      - LLM_PARALLEL=${LLM_PARALLEL:-8}
+      - CTX_PER_SLOT=${CTX_PER_SLOT:-8192}
+    command: >
+      --model /models/${LLM_MODEL:-Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf}
+      --host 0.0.0.0 --port 8080
+      --parallel ${LLM_PARALLEL:-8}
+      --ctx-size ${CTX_TOTAL:-65536}
+      --cont-batching --n-gpu-layers ${GPU_LAYERS:-99}
+      --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --jinja --metrics
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  searxng:
+    image: searxng/searxng:2026.9.25-12f8b6515
+    restart: unless-stopped
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+  agents:
+    build: .
+    restart: unless-stopped
+    depends_on: [llama, searxng]
+    env_file: .env
+    environment:
+      - LLM_BASE_URL=http://llama:8080/v1
+      - SEARXNG_URL=http://searxng:8080
+      - DATA_DIR=/data
+      - WORKSPACE_DIR=/data/workspace
+    volumes:
+      - ./data:/data

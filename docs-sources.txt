@@ -1,0 +1,27 @@
+# Documentación y código de referencia OFICIAL y actualizado por lenguaje. Se clona (sparse, sin historial)
+# en data/docs-lib/ e indexa en la memoria (tabla code_chunks, repo "docs:<nombre>") para todos los agentes.
+# Formato: nombre  owner/repo  rutas,separadas,por,comas (vacío = repo completo)
+python-doc        python/cpython                 Doc,Lib
+javascript-mdn    mdn/content                    files/en-us/web/javascript,files/en-us/web/api
+typescript        microsoft/TypeScript-Website   packages/documentation/copy/en
+node              nodejs/node                    doc/api
+cpp-core          isocpp/CppCoreGuidelines       CppCoreGuidelines.md,docs
+cpp-std-examples  cplusplus/draft                source
+java-jdk          openjdk/jdk                    src/java.base/share/classes/java/lang,src/java.base/share/classes/java/util,src/java.base/share/classes/java/io,src/java.base/share/classes/java/nio
+kotlin            JetBrains/kotlin-web-site      docs/topics
+csharp-dotnet     dotnet/docs                    docs/csharp,docs/core,docs/standard
+go                golang/go                      doc,src/fmt,src/net/http,src/os,src/io,src/strings,src/sync,src/context
+rust-book         rust-lang/book                 src
+rust-reference    rust-lang/reference            src
+rust-by-example   rust-lang/rust-by-example      src
+php               php/doc-en                     reference/array,reference/strings,reference/pdo,reference/mysqli,language
+ruby              ruby/ruby                      doc,lib
+perl              Perl/perl5                     pod
+swift-book        swiftlang/swift-book           TSPL.docc
+android-samples   android/architecture-samples
+postgres-doc      postgres/postgres              doc/src/sgml
+sqlite-doc        sqlite/sqlite                  doc
+mysql-server-doc  mysql/mysql-server             Docs
+bash              dylanaraps/pure-bash-bible
+shellcheck-wiki   koalaman/shellcheck            README.md
+powershell-docs   MicrosoftDocs/PowerShell-Docs  reference/7.5

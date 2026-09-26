@@ -1,0 +1,7 @@
+use_default_settings: true
+server:
+  secret_key: "cambia-esta-clave"
+  limiter: false
+search:
+  formats: [html, json]
+  default_lang: es

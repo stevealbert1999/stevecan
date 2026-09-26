@@ -1,0 +1,10 @@
+# Colecciones de skills de GitHub que se sincronizan en data/skills-lib/ e indexan en la memoria.
+# Formato: owner/repo [licencia]. Añade las que quieras.
+anthropics/skills            Apache-2.0 (docx/pdf/pptx/xlsx source-available)
+obra/superpowers             MIT
+intercom/2x-skills           MIT
+addyosmani/agent-skills      MIT
+jeffallan/claude-skills      MIT
+alirezarezvani/claude-skills MIT
+hashicorp/agent-skills       MPL-2.0
+NVIDIA/skills                Apache-2.0

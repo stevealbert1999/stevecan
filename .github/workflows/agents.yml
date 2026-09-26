@@ -1,0 +1,61 @@
+name: agents
+# Los 8 agentes corriendo desde GitHub Actions, encadenando ejecuciones sin fin.
+# Modo A (por defecto): runner self-hosted = tu PC con la GPU y llama-server (scripts/gh_runner.sh).
+# Modo B: runners de GitHub; el modelo sigue en tu PC expuesto por túnel (secreto LLM_BASE_URL).
+# Selección: variable de repositorio AGENTS_RUNNER = "self-hosted" (A) o "github" (B).
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: Minutos por ejecución antes de la parada ordenada y el reencadenado
+        default: "340"
+  schedule:
+    - cron: "17 */6 * * *"   # red de seguridad: relanza si la cadena se rompió
+
+permissions:
+  contents: write   # rama agents-data (estado)
+  actions: write    # encadenar la siguiente ejecución
+
+concurrency:
+  group: stevecan-agents
+  cancel-in-progress: false
+
+env:
+  LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || vars.LLM_BASE_URL || 'http://127.0.0.1:8080/v1' }}
+  LLM_MODEL: ${{ vars.LLM_MODEL || 'Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf' }}
+  LLM_API_KEY: ${{ secrets.LLM_API_KEY || 'none' }}
+  LLM_PARALLEL: ${{ vars.LLM_PARALLEL || '8' }}
+  SEARXNG_URL: ${{ vars.SEARXNG_URL || '' }}
+  DATA_DIR: ${{ github.workspace }}/data
+  WORKSPACE_DIR: ${{ github.workspace }}/data/workspace
+  CYCLE_SECONDS: ${{ vars.CYCLE_SECONDS || '20' }}
+
+jobs:
+  self-hosted:
+    if: (vars.AGENTS_RUNNER || 'self-hosted') == 'self-hosted'
+    runs-on: self-hosted
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/run-agents
+        with:
+          minutes: ${{ inputs.minutes || '340' }}
+          searxng: "false"
+          token: ${{ github.token }}
+
+  github-hosted:
+    if: vars.AGENTS_RUNNER == 'github'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/run-agents
+        with:
+          minutes: ${{ inputs.minutes || '340' }}
+          searxng: "true"
+          token: ${{ github.token }}
