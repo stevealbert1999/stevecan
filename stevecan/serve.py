@@ -11,6 +11,7 @@ Endpoints (cabecera Authorization: Bearer $API_TOKEN si API_TOKEN está definido
 import asyncio
 import json
 import logging
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -18,6 +19,13 @@ from . import config, llm, memory, projects
 from .consult import consult
 
 log = logging.getLogger("api")
+_loop = asyncio.new_event_loop()
+threading.Thread(target=_loop.run_forever, name="api-loop", daemon=True).start()
+
+
+def run(coro, timeout=1800):
+    """Ejecuta una corrutina en el event loop compartido (los clientes httpx viven en un solo loop)."""
+    return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -49,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(401, {"error": "no autorizado"})
         u = urlparse(self.path)
         if u.path == "/status":
-            return self._send(200, {"model": config.LLM_MODEL, "model_ok": asyncio.run(llm.healthy()),
+            return self._send(200, {"model": config.LLM_MODEL, "model_ok": run(llm.healthy(), 30),
                                     "stats": memory.stats(), "projects": [str(p) for p in config.PROJECT_DIRS]})
         if u.path == "/backups":
             q = parse_qs(u.query).get("project", [None])[0]
@@ -67,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
             q = (body.get("question") or "").strip()
             if not q:
                 return self._send(400, {"error": "falta question"})
-            return self._send(200, asyncio.run(consult(q, "api")))
+            return self._send(200, run(consult(q, "api")))
         if u.path == "/improve":
             project, instr = body.get("project"), (body.get("instruction") or "").strip()
             if not project or not instr:

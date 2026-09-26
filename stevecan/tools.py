@@ -2,6 +2,8 @@
 import asyncio
 import base64
 import html
+import ipaddress
+import socket
 import re
 import sys
 import urllib.parse
@@ -88,9 +90,29 @@ async def web_search(query: str, n: int = 6) -> list[dict]:
     return []
 
 
+def _is_public_url(url: str) -> bool:
+    """Bloquea localhost, redes privadas y metadatos cloud: el modelo o una página web no pueden hacer que
+    los agentes lean servicios internos (SSRF)."""
+    try:
+        u = urllib.parse.urlparse(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return False
+        for info in socket.getaddrinfo(u.hostname, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except (ValueError, socket.gaierror):
+        return False
+
+
 async def fetch_page(url: str, max_chars: int = 12000) -> str:
+    if not _is_public_url(url):
+        raise ValueError(f"URL no permitida (no pública): {url}")
     async with httpx.AsyncClient(headers=UA, timeout=30, follow_redirects=True) as c:
         r = await c.get(url)
+        if not _is_public_url(str(r.url)):
+            raise ValueError(f"redirección a URL no pública: {r.url}")
     r.raise_for_status()
     ctype = r.headers.get("content-type", "")
     text = r.text if "html" in ctype or "text" in ctype or "json" in ctype else ""
