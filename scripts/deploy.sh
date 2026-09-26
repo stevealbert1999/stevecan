@@ -10,5 +10,5 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 rsync -az --delete \
   --exclude .git --exclude data --exclude .venv --exclude '__pycache__' \
   "$ROOT/" "$HOST:$DEST/"
-ssh "$HOST" "cd '$DEST' && chmod +x scripts/*.sh && ./scripts/install.sh && .venv/bin/python -m stevecan.skills sync"
+ssh "$HOST" "cd '$DEST' && chmod +x scripts/*.sh && ./scripts/install.sh && .venv/bin/python -m stevecan.skills sync && .venv/bin/python -m stevecan.docs sync"
 echo "Desplegado en $HOST:$DEST. Estado: scripts/remote.sh $HOST status"

@@ -76,6 +76,16 @@ python -m stevecan.skills enable <nombre>        # lo copia a .claude/skills/ pa
 ```
 **Todos** los agentes (los 37 y `ask`) reciben en cada tarea los skills de la biblioteca que encajan; `librarian` la clona si falta y la actualiza a diario. Añade repos en `skills-sources.txt`.
 
+## Documentación y código oficial actualizado por lenguaje
+`docs-sources.txt` lista 24 fuentes oficiales (CPython `Doc`+`Lib`, MDN JavaScript/Web API, TypeScript, Node, C++ Core Guidelines y
+borrador del estándar, OpenJDK `java.base`, Kotlin, .NET/C#, Go, Rust book/reference/by-example, PHP, Ruby, Perl, Swift, Android,
+PostgreSQL, SQLite, MySQL, Bash, ShellCheck, PowerShell). Se clonan en modo sparse y sin historial en `data/docs-lib/` y se indexan
+en la memoria como `docs:<nombre>`; `librarian` las actualiza a diario. Todos los agentes y `ask` las consultan igual que tu código.
+```bash
+python -m stevecan.docs sync     # primera descarga (varios GB en el caso de MDN/JDK sparse: minutos)
+python -m stevecan.docs stats
+```
+
 ## Mejorar a tus agentes con lo aprendido
 - `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.
 - `data/proposals/*.md`: mejoras propuestas por `reviewer` para `stevecan/*.py`, con diff. Se aplican a mano tras revisarlas.

@@ -68,6 +68,7 @@ AUTO_APPLY = os.getenv("AUTO_APPLY", "0") == "1"       # 1 = fusiona mejoras apr
 BACKUP_KEEP = int(os.getenv("BACKUP_KEEP", "30"))
 MAX_CHANGE_LINES = int(os.getenv("MAX_CHANGE_LINES", "400"))
 SKILLS_LIB_DIR = DATA_DIR / "skills-lib"
+DOCS_LIB_DIR = DATA_DIR / "docs-lib"
 BACKUPS_DIR = DATA_DIR / "backups"
 WORKTREES_DIR = DATA_DIR / "worktrees"
 IMPROVEMENTS_DIR = DATA_DIR / "improvements"

@@ -10,6 +10,7 @@ from .agent import Agent
 from .ingest import index_dir
 from . import developer
 from . import skills as skills_lib
+from . import docs as docs_lib
 
 SEED_TOPICS = [
     "matemáticas avanzadas", "física", "programación en Python", "algoritmos y estructuras de datos",
@@ -309,6 +310,8 @@ class Librarian(Agent):
             loop = asyncio.get_running_loop()
             res = await loop.run_in_executor(None, skills_lib.sync)
             self.log.info("biblioteca de skills: %s", res)
+            docs = await loop.run_in_executor(None, docs_lib.sync)
+            self.log.info("documentación oficial: %d fuentes, %s", len(docs), memory.code_stats())
         if not config.CODE_DIRS:
             return None
         indexed = 0

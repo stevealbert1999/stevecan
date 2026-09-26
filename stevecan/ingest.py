@@ -12,11 +12,12 @@ SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", ".venv", "venv", "env", "__p
 TEXT_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".html", ".css", ".scss",
             ".c", ".h", ".cpp", ".hpp", ".cc", ".cs", ".java", ".kt", ".go", ".rs", ".rb", ".php", ".swift",
             ".m", ".sh", ".bash", ".zsh", ".ps1", ".sql", ".lua", ".dart", ".scala", ".r", ".jl", ".ex", ".exs",
-            ".ino", ".pde", ".s", ".asm", ".v", ".sv", ".vhd",
+            ".ino", ".pde", ".s", ".asm", ".v", ".sv", ".vhd", ".kt", ".kts", ".pl", ".pm", ".pod", ".erl",
+            ".hs", ".clj", ".groovy", ".ps1", ".psm1", ".sgml", ".adoc", ".tex", ".texi", ".1", ".texinfo",
             ".md", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env.example",
             ".xml", ".proto", ".graphql", ".dockerfile", ".gradle", ".cmake", ".mk"}
 TEXT_NAMES = {"Dockerfile", "Makefile", "CMakeLists.txt", "requirements.txt", "package.json", "Cargo.toml"}
-MAX_BYTES = 1_000_000
+MAX_BYTES = 2_000_000
 CHUNK_LINES = 120
 OVERLAP = 10
 
@@ -39,9 +40,9 @@ def _chunks(text: str):
     return out
 
 
-def index_dir(root: Path) -> dict:
+def index_dir(root: Path, repo_name: str | None = None) -> dict:
     root = root.resolve()
-    repo = root.name
+    repo = repo_name or root.name
     seen, added, unchanged = set(), 0, 0
     for p in root.rglob("*"):
         if any(part in SKIP_DIRS for part in p.relative_to(root).parts[:-1]):
