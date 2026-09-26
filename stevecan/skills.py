@@ -33,11 +33,20 @@ def _frontmatter(text: str):
     m = re.match(r"^---\s*\n(.*?)\n---", text, flags=re.S)
     name = desc = ""
     if m:
-        for line in m.group(1).splitlines():
+        lines = m.group(1).splitlines()
+        for i, line in enumerate(lines):
             if line.lower().startswith("name:"):
                 name = line.split(":", 1)[1].strip().strip("'\"")
             elif line.lower().startswith("description:"):
                 desc = line.split(":", 1)[1].strip().strip("'\"")
+                if desc in (">", ">-", "|", "|-", ""):
+                    folded = []
+                    for nxt in lines[i + 1:]:
+                        if nxt.startswith((" ", "\t")):
+                            folded.append(nxt.strip())
+                        else:
+                            break
+                    desc = " ".join(folded)
     return name, desc
 
 

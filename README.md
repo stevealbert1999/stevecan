@@ -70,7 +70,7 @@ Cada mejora sigue este orden y se aborta en cuanto algo falla:
 
 ## Biblioteca de skills de GitHub
 ```bash
-python -m stevecan.skills sync                   # clona/actualiza las colecciones de skills-sources.txt (≈1.400 skills) e indexa
+python -m stevecan.skills sync                   # clona/actualiza las colecciones de skills-sources.txt (≈2.500 skills) e indexa
 python -m stevecan.skills search "android gradle"
 python -m stevecan.skills enable <nombre>        # lo copia a .claude/skills/ para Claude Code
 ```
