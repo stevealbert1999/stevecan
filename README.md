@@ -74,7 +74,7 @@ python -m stevecan.skills sync                   # clona/actualiza las coleccion
 python -m stevecan.skills search "android gradle"
 python -m stevecan.skills enable <nombre>        # lo copia a .claude/skills/ para Claude Code
 ```
-Los agentes (`developer`, `coder`, `ask`) consultan la biblioteca automáticamente. Añade repos en `skills-sources.txt`.
+**Todos** los agentes (los 37 y `ask`) reciben en cada tarea los skills de la biblioteca que encajan; `librarian` la clona si falta y la actualiza a diario. Añade repos en `skills-sources.txt`.
 
 ## Mejorar a tus agentes con lo aprendido
 - `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.

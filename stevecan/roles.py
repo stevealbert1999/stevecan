@@ -1,4 +1,5 @@
 """Los 8 agentes. Todos comparten el mismo modelo local y la misma memoria."""
+import asyncio
 import json
 import re
 import time
@@ -8,6 +9,7 @@ from . import config, llm, memory, tools
 from .agent import Agent
 from .ingest import index_dir
 from . import developer
+from . import skills as skills_lib
 
 SEED_TOPICS = [
     "matemáticas avanzadas", "física", "programación en Python", "algoritmos y estructuras de datos",
@@ -38,7 +40,8 @@ class Curriculum(Agent):
             "verificables (no vagos), priorizando huecos y puntos débiles. Diversifica entre áreas.",
             f"Áreas semilla: {', '.join(SEED_TOPICS)}\nTemas ya cubiertos: {known}\n"
             f"Puntos débiles en exámenes: {json.dumps(weak, ensure_ascii=False)}\n"
-            'Devuelve {"topics":[{"topic":"...","area":"...","why":"...","needs_code":true|false}]} con 6 elementos.')
+            'Devuelve {"topics":[{"topic":"...","area":"...","why":"...","needs_code":true|false}]} con 6 elementos.'
+            + self.skills("curriculum learning plan", 1))
         if not data or "topics" not in data:
             return "sin propuestas"
         n = 0
@@ -81,7 +84,7 @@ class Researcher(Agent):
             "Nada inventado. Cada hecho debe citar la URL de la fuente.",
             f"Tema: {topic}\n\n{src_text}\n\n"
             'Devuelve {"facts":[{"content":"hecho autocontenido (2-4 frases)","source":"url","confidence":0.0-1.0}]} '
-            "con entre 3 y 8 hechos.", max_tokens=1800)
+            "con entre 3 y 8 hechos." + self.skills(topic, 1, 800), max_tokens=1800)
         if not data or not data.get("facts"):
             memory.finish_task(task["id"], "sin hechos extraídos", "failed")
             return f"sin hechos: {topic}"
@@ -123,7 +126,8 @@ class Critic(Agent):
             "Eres un verificador escéptico. Compara la afirmación con la fuente. Detecta errores, "
             "exageraciones o afirmaciones no respaldadas.",
             f"Afirmación: {k['content']}\nFuente ({k['source']}):\n{source_text or '(no accesible)'}\n\n"
-            'Devuelve {"verdict":"correct|fix|delete","confidence":0.0-1.0,"fixed_content":"solo si verdict=fix","reason":"..."}')
+            'Devuelve {"verdict":"correct|fix|delete","confidence":0.0-1.0,"fixed_content":"solo si verdict=fix","reason":"..."}'
+            + self.skills(k["topic"], 1, 800))
         if not data:
             memory.finish_task(task["id"], "sin veredicto", "failed")
             return None
@@ -161,7 +165,7 @@ class Coder(Agent):
                 "Eres un programador que aprende experimentando. Escribe un script Python autocontenido "
                 "(solo librería estándar) que demuestre o compruebe algo concreto del tema, imprimiendo resultados.",
                 f"Tema: {topic}\nConocimiento previo:\n{known}\n{feedback}\n"
-                'Devuelve {"goal":"qué se comprueba","code":"..."}', max_tokens=2000)
+                'Devuelve {"goal":"qué se comprueba","code":"..."}' + self.skills(topic, 2), max_tokens=2000)
             if not data or not data.get("code"):
                 continue
             code = data["code"]
@@ -200,8 +204,8 @@ class Synthesizer(Agent):
         note = await llm.ask(
             "Eres un redactor técnico. Escribe una nota de estudio en Markdown, clara y estructurada, usando "
             "SOLO los hechos dados. Incluye sección 'Fuentes' con las URLs.",
-            f"Tema: {topic}\nHechos:\n{_ctx(facts, 30)}\nFuentes: {sorted({f['source'] for f in facts if f['source']})}",
-            max_tokens=2000)
+            f"Tema: {topic}\nHechos:\n{_ctx(facts, 30)}\nFuentes: {sorted({f['source'] for f in facts if f['source']})}"
+            + self.skills(topic, 1, 800), max_tokens=2000)
         path = config.NOTES_DIR / (topic[:60].replace("/", "_").replace(" ", "_") + ".md")
         path.write_text(note, encoding="utf-8")
         memory.finish_task(task["id"], str(path))
@@ -225,7 +229,7 @@ class Examiner(Agent):
         qs = await llm.ask_json(
             "Genera preguntas de examen precisas cuya respuesta esté en los hechos dados.",
             f"Tema: {topic}\nHechos:\n{_ctx(facts, 10)}\n"
-            'Devuelve {"questions":[{"q":"...","expected":"respuesta breve"}]} con 3 preguntas.')
+            'Devuelve {"questions":[{"q":"...","expected":"respuesta breve"}]} con 3 preguntas.' + self.skills(topic, 1, 600))
         if not qs or not qs.get("questions"):
             memory.finish_task(task["id"], "sin preguntas", "failed")
             return None
@@ -296,7 +300,15 @@ class Librarian(Agent):
     name = "librarian"
     interval = config.CYCLE_SECONDS * 3
 
+    _last_skills_sync = 0.0
+
     async def step(self):
+        # Biblioteca de skills: se clona si falta y se actualiza una vez al día, en un hilo aparte
+        if time.time() - Librarian._last_skills_sync > 86400:
+            Librarian._last_skills_sync = time.time()
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, skills_lib.sync)
+            self.log.info("biblioteca de skills: %s", res)
         if not config.CODE_DIRS:
             return None
         indexed = 0
@@ -311,7 +323,7 @@ class Librarian(Agent):
             summary = await llm.ask(
                 "Resume este fichero de código para un índice del proyecto: propósito, funciones/clases clave, "
                 "dependencias y cómo se usa. 3-6 frases, solo lo que está en el código.",
-                f"Fichero: {f['repo']}/{f['path']}\n\n{text}", max_tokens=400, temperature=0.2)
+                f"Fichero: {f['repo']}/{f['path']}\n\n{text}" + self.skills(f["path"], 1, 600), max_tokens=400, temperature=0.2)
             memory.set_code_summary(f["repo"], f["path"], summary)
             kid = memory.add_knowledge(f"código:{f['repo']}", f"{f['path']}: {summary}",
                                        f"file://{f['repo']}/{f['path']}", self.name, confidence=0.85)
@@ -350,7 +362,7 @@ class Expert(Agent):
             f"Eres un ingeniero senior experto en: {self.domain}. Diseñas tu propio plan de maestría: "
             "subtemas concretos, prácticos y verificables, de básico a avanzado, sin repetir lo cubierto.",
             f"Cubierto: {[c['topic'] for c in covered]}\nDébil: {weak}\n"
-            'Devuelve {"subtopics":[{"topic":"...","practical":true|false}]} con 3 elementos.')
+            'Devuelve {"subtopics":[{"topic":"...","practical":true|false}]} con 3 elementos.' + self.skills(self.domain, 3, 700))
         if not data or not data.get("subtopics"):
             return None
         n = 0
@@ -380,8 +392,8 @@ class Trainer(Agent):
             "Diseña un ejercicio de programación en Python (solo librería estándar) con tests unittest "
             "que un experto resolvería en pocos minutos. Los tests deben importar `solution`.",
             f"Dominio: {domain}. Dificultad 1-5: {difficulty}.\n"
-            'Devuelve {"title":"...","statement":"enunciado claro con firma de la función","tests":"código unittest completo que importa solution"}',
-            max_tokens=1500)
+            'Devuelve {"title":"...","statement":"enunciado claro con firma de la función","tests":"código unittest completo que importa solution"}'
+            + self.skills(domain, 1, 600), max_tokens=1500)
         if not kata or not kata.get("tests") or not kata.get("statement"):
             return None
         kdir = config.KATAS_DIR / f"{int(time.time())}_{_slug(kata.get('title', 'kata'))}"
@@ -391,7 +403,8 @@ class Trainer(Agent):
         t0, passed, feedback = time.time(), False, ""
         for attempt in range(1, 4):
             sol = await llm.ask("Eres un programador experto y rápido. Devuelve SOLO el código Python de solution.py, sin explicaciones ni markdown.",
-                                f"{kata['statement']}\n\nTests:\n{kata['tests']}\n{feedback}", temperature=0.2, max_tokens=1500)
+                                f"{kata['statement']}\n\nTests:\n{kata['tests']}\n{feedback}" + self.skills(kata.get("title", domain), 2, 1000),
+                                temperature=0.2, max_tokens=1500)
             sol = re.sub(r"^```(?:python)?\s*|\s*```$", "", sol.strip(), flags=re.S)
             (kdir / "solution.py").write_text(sol, encoding="utf-8")
             res = await tools.run_python_in(kdir, ["-m", "unittest", "-q", "test_solution"])
@@ -429,7 +442,8 @@ class Skillsmith(Agent):
                 "luego instrucciones accionables, procedimientos paso a paso, errores comunes y ejemplos, SOLO a partir de los hechos dados. "
                 "Termina con sección 'Fuentes'.",
                 f"name: {slug}\nTema: {t['topic']}\nHechos:\n{_ctx(facts, 25)}\n"
-                f"Fuentes: {sorted({f['source'] for f in facts if f['source']})}", max_tokens=2200)
+                f"Fuentes: {sorted({f['source'] for f in facts if f['source']})}"
+                + self.skills("writing skills SKILL.md format", 1, 1500), max_tokens=2200)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(body, encoding="utf-8")
             return f"skill escrita: {slug}"
@@ -459,7 +473,7 @@ class Reviewer(Agent):
             "(robustez, velocidad, calidad de aprendizaje) con un parche en formato diff unificado. Nada especulativo: "
             "cada propuesta debe referirse a líneas reales del fichero.",
             f"Métricas actuales del sistema: {json.dumps(stats, ensure_ascii=False, default=str)[:1500]}\n\n"
-            f"Fichero stevecan/{target.name}:\n```python\n{src[:14000]}\n```", max_tokens=2500)
+            f"Fichero stevecan/{target.name}:\n```python\n{src[:14000]}\n```" + self.skills("code review python", 2, 1200), max_tokens=2500)
         out = config.PROPOSALS_DIR / f"{target.stem}.md"
         out.write_text(f"# Propuesta de mejora: stevecan/{target.name}\n\n_{time.strftime('%Y-%m-%d %H:%M')}_\n\n{review}\n",
                        encoding="utf-8")
