@@ -58,7 +58,7 @@ async def _web_context(question: str, n_pages: int = 3) -> tuple[str, list[str]]
         except Exception:  # noqa: BLE001
             continue
         if len(text) > 300:
-            pages.append(f"### {r['title']}\nURL: {r['url']}\n{text}")
+            pages.append(f"### {r['title']}\nURL: {r['url']}\n{tools.sanitize_untrusted(text, r['url'], 6000)}")
             urls.append(r["url"])
     return "\n\n".join(pages), urls
 

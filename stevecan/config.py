@@ -116,3 +116,10 @@ LLM_THINK_BASE_URL = _env("LLM_THINK_BASE_URL", "").rstrip("/")   # servidor opc
 LLM_THINK_MODEL = _env("LLM_THINK_MODEL", "")
 EMBED_BASE_URL = _env("EMBED_BASE_URL", "").rstrip("/")           # llama-server --embeddings (p. ej. Qwen3-Embedding-0.6B)
 EMBED_MODEL = _env("EMBED_MODEL", "embedding")
+
+# Umbrales de calidad (stevecan.evaluate): alerta si se incumplen
+EVAL_MIN_EXAM = float(_env("EVAL_MIN_EXAM", "0.6"))
+EVAL_MIN_KATA = float(_env("EVAL_MIN_KATA", "0.5"))
+EVAL_MAX_DROP = float(_env("EVAL_MAX_DROP", "0.15"))
+EVAL_MAX_DELETE_RATE = float(_env("EVAL_MAX_DELETE_RATE", "0.4"))
+EVAL_MAX_ERROR_RATE = float(_env("EVAL_MAX_ERROR_RATE", "0.2"))

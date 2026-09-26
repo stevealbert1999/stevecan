@@ -67,6 +67,12 @@ CREATE TRIGGER IF NOT EXISTS l_ad AFTER DELETE ON lessons BEGIN
   INSERT INTO lessons_fts(lessons_fts, rowid, domain, lesson) VALUES('delete', old.id, old.domain, old.lesson); END;
 CREATE TABLE IF NOT EXISTS embeddings(
   kind TEXT NOT NULL, ref INTEGER NOT NULL, vec BLOB NOT NULL, created REAL, PRIMARY KEY(kind, ref));
+CREATE TABLE IF NOT EXISTS plans(
+  id INTEGER PRIMARY KEY, domain TEXT NOT NULL, subtopic TEXT NOT NULL, level INTEGER DEFAULT 1,
+  practical INTEGER DEFAULT 0, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0,
+  created REAL, done_at REAL, UNIQUE(domain, subtopic));
+CREATE TABLE IF NOT EXISTS metrics(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, value REAL, window TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, agent TEXT, kind TEXT, detail TEXT, created REAL);
 """)
@@ -287,6 +293,43 @@ def by_ids(table, ids):
     marks = ",".join("?" * len(ids))
     rows_ = {r["id"]: dict(r) for r in _q(f"SELECT * FROM {table} WHERE id IN ({marks})", tuple(ids))}
     return [rows_[i] for i in ids if i in rows_]
+
+
+# ---- planes de estudio por dominio ------------------------------------------
+def plan_add(domain, subtopic, level=1, practical=False):
+    _q("INSERT OR IGNORE INTO plans(domain,subtopic,level,practical,created) VALUES(?,?,?,?,?)",
+       (domain, subtopic.strip(), int(level), int(bool(practical)), time.time()))
+
+
+def plan_next(domain, n=3):
+    with _lock:
+        rows_ = [dict(r) for r in _q("SELECT * FROM plans WHERE domain=? AND status='pending' ORDER BY level, id LIMIT ?", (domain, n))]
+        for r in rows_:
+            _q("UPDATE plans SET status='in_progress', attempts=attempts+1 WHERE id=?", (r["id"],))
+        return rows_
+
+
+def plan_mark(domain, subtopic, status):
+    _q("UPDATE plans SET status=?, done_at=? WHERE domain=? AND subtopic=?",
+       (status, time.time() if status == "done" else None, domain, subtopic))
+
+
+def plan_stats(domain=None):
+    where, args = ("WHERE domain=?", (domain,)) if domain else ("", ())
+    return {r["status"]: r["n"] for r in _q(f"SELECT status, COUNT(*) n FROM plans {where} GROUP BY status", args)}
+
+
+def plan_subtopics(domain):
+    return [r["subtopic"] for r in _q("SELECT subtopic FROM plans WHERE domain=? ORDER BY id", (domain,))]
+
+
+# ---- métricas históricas ----------------------------------------------------
+def metric_add(name, value, window="24h"):
+    _q("INSERT INTO metrics(name,value,window,created) VALUES(?,?,?,?)", (name, value, window, time.time()))
+
+
+def metric_history(name, limit=60):
+    return [dict(r) for r in _q("SELECT value, created FROM metrics WHERE name=? ORDER BY id DESC LIMIT ?", (name, limit))][::-1]
 
 
 def rows(sql, args=()):

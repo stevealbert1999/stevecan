@@ -7,6 +7,7 @@ CLI:
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -139,8 +140,8 @@ def detect_test_cmd(project: Path) -> str | None:
             pass
     if (p / "pyproject.toml").exists() or (p / "pytest.ini").exists() or (p / "tests").is_dir() or list(p.glob("test_*.py")):
         return f"{sys.executable} -m pytest -q -x --no-header -p no:cacheprovider"
-    if (p / "gradlew").exists():
-        return "./gradlew test --quiet"
+    if (p / "gradlew").exists() or (p / "gradlew.bat").exists():
+        return "gradlew.bat test --quiet" if os.name == "nt" else "./gradlew test --quiet"
     if (p / "pom.xml").exists():
         return "mvn -q test"
     if (p / "Cargo.toml").exists():

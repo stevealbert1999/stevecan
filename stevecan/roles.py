@@ -12,6 +12,7 @@ from . import developer
 from . import skills as skills_lib
 from . import docs as docs_lib
 from . import embed
+from . import evaluate as evaluate_mod
 
 SEED_TOPICS = [
     "matemáticas avanzadas", "física", "programación en Python", "algoritmos y estructuras de datos",
@@ -70,6 +71,8 @@ class Researcher(Agent):
         results = await tools.web_search(topic, n=5)
         if not results:
             memory.finish_task(task["id"], "sin resultados de búsqueda", "failed")
+            if task["payload"].get("plan_id"):
+                memory._q("UPDATE plans SET status='pending' WHERE id=? AND attempts<3", (task["payload"]["plan_id"],))
             return f"sin resultados: {topic}"
         pages = []
         for r in results[:3]:
@@ -80,7 +83,7 @@ class Researcher(Agent):
         if not pages:
             memory.finish_task(task["id"], "no se pudo leer ninguna fuente", "failed")
             return f"fuentes ilegibles: {topic}"
-        src_text = "\n\n".join(f"FUENTE {u}\n{t}" for u, t in pages)
+        src_text = "\n\n".join(f"FUENTE {u}\n{tools.sanitize_untrusted(t, u, 7000)}" for u, t in pages)
         data = await llm.ask_json(
             "Eres un investigador riguroso. Extrae hechos concretos y verificables SOLO de las fuentes dadas. "
             "Nada inventado. Cada hecho debe citar la URL de la fuente.",
@@ -100,6 +103,8 @@ class Researcher(Agent):
         memory.add_task("synthesize", {"topic": topic}, self.name, priority=7)
         memory.add_task("exam", {"topic": topic}, self.name, priority=8)
         memory.finish_task(task["id"], f"{len(ids)} hechos")
+        if task["payload"].get("plan_id"):
+            memory._q("UPDATE plans SET status='done', done_at=? WHERE id=?", (time.time(), task["payload"]["plan_id"]))
         return f"{topic}: {len(ids)} hechos de {len(pages)} fuentes"
 
 
@@ -127,7 +132,7 @@ class Critic(Agent):
         data = await llm.ask_json(
             "Eres un verificador escéptico. Compara la afirmación con la fuente. Detecta errores, "
             "exageraciones o afirmaciones no respaldadas.",
-            f"Afirmación: {k['content']}\nFuente ({k['source']}):\n{source_text or '(no accesible)'}\n\n"
+            f"Afirmación: {k['content']}\nFuente ({k['source']}):\n{tools.sanitize_untrusted(source_text, k['source'], 8000) if source_text else '(no accesible)'}\n\n"
             'Devuelve {"verdict":"correct|fix|delete","confidence":0.0-1.0,"fixed_content":"solo si verdict=fix","reason":"..."}'
             + self.skills(k["topic"], 1, 800))
         if not data:
@@ -293,7 +298,11 @@ class Orchestrator(Agent):
             for t in SEED_TOPICS:
                 memory.add_task("research", {"topic": t, "area": t}, self.name, priority=5)
         recent = memory.rows("SELECT agent, kind, detail FROM events ORDER BY id DESC LIMIT 30")
-        report = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "model_ok": ok, "stats": st, "recent": recent}
+        quality = evaluate_mod.evaluate()
+        if quality["alerts"]:
+            self.log.warning("ALERTAS de calidad: %s", " | ".join(quality["alerts"]))
+        report = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "model_ok": ok, "stats": st, "quality": quality,
+                  "plans": memory.plan_stats(), "recent": recent}
         Path(config.DATA_DIR / "status.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
         return f"modelo={'OK' if ok else 'CAÍDO'} conocimiento={st['knowledge']} verificados={st['verified']} pendientes={st['pending']}"
 
@@ -352,7 +361,8 @@ def _slug(text):
 
 # 10 ----------------------------------------------------------------------
 class Expert(Agent):
-    """Un ingeniero experto por dominio: profundiza sin parar en su campo (subtemas, fichas, ejemplos)."""
+    """Un ingeniero experto por dominio con un PLAN DE ESTUDIO PERSISTENTE (tabla plans): lo genera una vez,
+    avanza por él sin repetir, marca lo hecho y lo amplía solo cuando se agota o aparecen puntos débiles."""
     interval = config.CYCLE_SECONDS * 4
 
     def __init__(self, domain):
@@ -360,31 +370,40 @@ class Expert(Agent):
         self.name = "expert:" + _slug(domain)[:24]
         super().__init__()
 
-    async def step(self):
-        pend = memory.pending_counts()
-        if pend.get("research", 0) >= 24:
-            return None
-        covered = memory.rows("SELECT DISTINCT topic FROM knowledge WHERE topic LIKE ? ORDER BY updated DESC LIMIT 40",
-                              (f"%[{self.domain[:20]}%",))
-        weak = memory.rows("SELECT topic, AVG(score) s FROM exams WHERE topic LIKE ? GROUP BY topic HAVING s<0.7 LIMIT 5",
+    async def _extend_plan(self, n=24):
+        done = memory.plan_subtopics(self.domain)
+        weak = memory.rows("SELECT topic, AVG(score) s FROM exams WHERE topic LIKE ? GROUP BY topic HAVING s<0.7 LIMIT 8",
                            (f"%[{self.domain[:20]}%",))
         data = await llm.ask_json(
-            f"Eres un ingeniero senior experto en: {self.domain}. Diseñas tu propio plan de maestría: "
-            "subtemas concretos, prácticos y verificables, de básico a avanzado, sin repetir lo cubierto.",
-            f"Cubierto: {[c['topic'] for c in covered]}\nDébil: {weak}\n"
-            'Devuelve {"subtopics":[{"topic":"...","practical":true|false}]} con 3 elementos.' + self.skills(self.domain, 3, 700))
-        if not data or not data.get("subtopics"):
+            f"Eres un ingeniero senior experto en: {self.domain}. Diseña un plan de maestría: subtemas concretos, "
+            "prácticos y verificables, ordenados de básico (nivel 1) a avanzado (nivel 5), sin repetir los ya planificados.",
+            f"Ya planificados: {done[-80:]}\nPuntos débiles en exámenes (deben volver al plan): {weak}\n"
+            f'Devuelve {{"subtopics":[{{"topic":"...","level":1-5,"practical":true|false}}]}} con {n} elementos.'
+            + self.skills(self.domain, 3, 700), max_tokens=2500)
+        added = 0
+        for st in (data or {}).get("subtopics", []):
+            if isinstance(st, dict) and st.get("topic"):
+                memory.plan_add(self.domain, st["topic"], st.get("level", 1), st.get("practical", False))
+                added += 1
+        return added
+
+    async def step(self):
+        if memory.pending_counts().get("research", 0) >= 24:
             return None
+        stats = memory.plan_stats(self.domain)
+        if stats.get("pending", 0) == 0:
+            added = await self._extend_plan()
+            if not added:
+                return None
+            self.log.info("plan ampliado con %d subtemas (%s)", added, self.domain[:30])
         n = 0
-        for st in data["subtopics"][:3]:
-            if not isinstance(st, dict) or not st.get("topic"):
-                continue
-            topic = f"{st['topic']} [{self.domain[:20]}]"
-            memory.add_task("research", {"topic": topic, "area": self.domain}, self.name, priority=5)
-            if st.get("practical"):
+        for item in memory.plan_next(self.domain, 3):
+            topic = f"{item['subtopic']} [{self.domain[:20]}]"
+            memory.add_task("research", {"topic": topic, "area": self.domain, "plan_id": item["id"]}, self.name, priority=5)
+            if item["practical"]:
                 memory.add_task("code", {"topic": topic}, self.name, priority=6)
             n += 1
-        return f"{n} subtemas encolados" if n else None
+        return f"{n} subtemas del plan encolados ({memory.plan_stats(self.domain)})" if n else None
 
 
 # 11 ----------------------------------------------------------------------
@@ -535,8 +554,9 @@ class Tuner(Agent):
             return None
         Tuner._last = time.time()
         import sys
-        proc = await asyncio.create_subprocess_exec(
-            "nice", "-n", "15", sys.executable, "-m", "stevecan.train", "run",
+        import os
+        cmd = ([] if os.name == "nt" else ["nice", "-n", "15"]) + [sys.executable, "-m", "stevecan.train", "run"]
+        proc = await asyncio.create_subprocess_exec(*cmd,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
         out, _ = await proc.communicate()
         tail = out.decode(errors="ignore")[-1500:]

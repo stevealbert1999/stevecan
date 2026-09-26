@@ -112,6 +112,13 @@ Entrenar el 30B en CPU no es viable (semanas por época). Lo que sí funciona y 
 - **Lecciones aprendidas**: cada fallo real (kata que no pasa, mejora descartada, hecho falso) se convierte en una lección
   reutilizable que se inyecta en las tareas siguientes.
 
+## Panel y alertas de calidad
+`python -m stevecan.serve` sirve un panel en `http://host:8765/` (métricas de 24 h frente a los 7 días anteriores, alertas,
+planes de estudio por dominio, últimos eventos) y `GET /metrics` en JSON con histórico. `python -m stevecan.evaluate` lo imprime.
+Alertas (también en `data/alerts.log` y en el log del orchestrator) cuando: nota media de exámenes < `EVAL_MIN_EXAM`, tasa de
+katas < `EVAL_MIN_KATA`, caída > `EVAL_MAX_DROP` respecto a la semana anterior, el crítico borra > `EVAL_MAX_DELETE_RATE` de los
+hechos, tasa de errores > `EVAL_MAX_ERROR_RATE`, o no hay actividad en 24 h.
+
 ## Mejorar a tus agentes con lo aprendido
 - `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.
 - `data/proposals/*.md`: mejoras propuestas por `reviewer` para `stevecan/*.py`, con diff. Se aplican a mano tras revisarlas.
@@ -145,6 +152,16 @@ python -m stevecan.ask "¿cómo firmo un APK con apksigner?"
 python -m stevecan.serve        # API HTTP: GET /status, POST /ask, POST /improve, POST /research, GET /backups, GET /improvements
 curl -s -X POST localhost:8765/ask -H 'Authorization: Bearer TOKEN' -d '{"question":"..."}'
 ```
+
+## Windows (sin WSL ni Docker)
+PowerShell como administrador, con Python 3.11+, Git for Windows y llama.cpp (release `win-cuda` o `win-cpu`) en el PATH:
+```powershell
+Copy-Item .env.example .env      # edita GGUF_PATH (ruta Windows), PROJECT_DIRS (separa rutas con ':' igualmente), API_TOKEN
+powershell -ExecutionPolicy Bypass -File scripts\windows\install.ps1
+```
+Crea tres tareas programadas (`stevecan-llama`, `stevecan-agents`, `stevecan-api`) que arrancan al iniciar Windows y se
+reinician solas. Panel en http://localhost:8765/ ; logs en `data\agents.log`. Desinstalar: `scripts\windows\uninstall.ps1`.
+El entrenamiento en CPU y el developer funcionan igual; `scripts/*.sh` (deploy, remote, gh_runner) son solo para Linux/macOS.
 
 ## Ejecutar los agentes desde GitHub (Actions)
 GitHub no tiene GPU: el modelo siempre corre en tu PC. GitHub solo orquesta. Workflow: `.github/workflows/agents.yml`
