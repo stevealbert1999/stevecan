@@ -1,4 +1,4 @@
-# stevecan — 9 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
+# stevecan — 20 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
 
 Todos los agentes comparten un único `llama-server` con 8 slots paralelos y batching continuo:
 sin límites de peticiones ni de tokens más allá de tu hardware.
@@ -14,6 +14,10 @@ sin límites de peticiones ni de tokens más allá de tu hardware.
 | curator | limpia duplicados, baja confianza, tareas atascadas |
 | orchestrator | vigila el modelo y escribe `data/status.json` |
 | librarian | indexa y resume **tu código** (`CODE_DIRS`) para que los agentes lo conozcan |
+| trainer | katas de programación con tests reales contra reloj: mide velocidad y tasa de acierto |
+| skillsmith | convierte lo aprendido en skills `SKILL.md` (`data/skills/`) para tus agentes y Claude Code |
+| reviewer | revisa el código de los propios agentes y deja propuestas con parche en `data/proposals/` |
+| expert:× 8 | un ingeniero experto por dominio (`EXPERT_DOMAINS`) que profundiza sin parar en su campo |
 
 ## Requisitos
 - `llama-server` (llama.cpp) en el PATH, o Docker con GPU NVIDIA.
@@ -47,6 +51,11 @@ python -m stevecan.ingest /ruta/proyecto      # indexación manual inmediata
 python -m stevecan.ask "¿dónde se inicializa el bus CAN y con qué bitrate?"
 ```
 `ask` responde citando ruta y líneas. Los agentes `coder` y `synthesizer` usan el mismo índice. Fine-tuning (LoRA) no es necesario para esto y funciona peor para hechos concretos.
+
+## Mejorar a tus agentes con lo aprendido
+- `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.
+- `data/proposals/*.md`: mejoras propuestas por `reviewer` para `stevecan/*.py`, con diff. Se aplican a mano tras revisarlas.
+- `data/status.json`: tasa de acierto y tiempo medio de las katas (`trainer`), nota media de exámenes, cobertura por dominio.
 
 ## Datos
 - `data/stevecan.db` — conocimiento, tareas, exámenes, eventos (SQLite FTS5)

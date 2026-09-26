@@ -43,6 +43,9 @@ CREATE TRIGGER IF NOT EXISTS c_ad AFTER DELETE ON code_chunks BEGIN
   INSERT INTO code_fts(code_fts, rowid, path, content) VALUES('delete', old.id, old.path, old.content); END;
 CREATE TABLE IF NOT EXISTS code_files(
   repo TEXT NOT NULL, path TEXT NOT NULL, sha TEXT, summary TEXT, updated REAL, PRIMARY KEY(repo, path));
+CREATE TABLE IF NOT EXISTS katas(
+  id INTEGER PRIMARY KEY, domain TEXT, title TEXT, difficulty INTEGER, passed INTEGER,
+  seconds REAL, attempts INTEGER, path TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS events(
   id INTEGER PRIMARY KEY, agent TEXT, kind TEXT, detail TEXT, created REAL);
 """)
@@ -195,4 +198,7 @@ def stats():
         "exam_avg": _q("SELECT AVG(score) avg FROM exams").fetchone()["avg"],
         "pending": pending_counts(),
         "code": code_stats(),
+        "katas": _q("SELECT COUNT(*) n, AVG(passed) pass_rate, AVG(seconds) avg_s FROM katas").fetchone()["n"],
+        "kata_pass_rate": _q("SELECT AVG(passed) r FROM katas").fetchone()["r"],
+        "kata_avg_seconds": _q("SELECT AVG(seconds) s FROM katas WHERE passed=1").fetchone()["s"],
     }

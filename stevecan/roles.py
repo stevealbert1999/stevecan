@@ -1,6 +1,8 @@
 """Los 8 agentes. Todos comparten el mismo modelo local y la misma memoria."""
 import json
+import re
 import time
+import unicodedata
 from pathlib import Path
 from . import config, llm, memory, tools
 from .agent import Agent
@@ -320,4 +322,154 @@ class Librarian(Agent):
         return f"ficheros reindexados={indexed} resumidos={done} {memory.code_stats()}" if (indexed or done) else None
 
 
-ALL_AGENTS = [Curriculum, Researcher, Critic, Coder, Synthesizer, Examiner, Curator, Orchestrator, Librarian]
+def _slug(text):
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60] or "tema"
+
+
+# 10 ----------------------------------------------------------------------
+class Expert(Agent):
+    """Un ingeniero experto por dominio: profundiza sin parar en su campo (subtemas, fichas, ejemplos)."""
+    interval = config.CYCLE_SECONDS * 4
+
+    def __init__(self, domain):
+        self.domain = domain
+        self.name = "expert:" + _slug(domain)[:24]
+        super().__init__()
+
+    async def step(self):
+        pend = memory.pending_counts()
+        if pend.get("research", 0) >= 24:
+            return None
+        covered = memory.rows("SELECT DISTINCT topic FROM knowledge WHERE topic LIKE ? ORDER BY updated DESC LIMIT 40",
+                              (f"%[{self.domain[:20]}%",))
+        weak = memory.rows("SELECT topic, AVG(score) s FROM exams WHERE topic LIKE ? GROUP BY topic HAVING s<0.7 LIMIT 5",
+                           (f"%[{self.domain[:20]}%",))
+        data = await llm.ask_json(
+            f"Eres un ingeniero senior experto en: {self.domain}. Diseñas tu propio plan de maestría: "
+            "subtemas concretos, prácticos y verificables, de básico a avanzado, sin repetir lo cubierto.",
+            f"Cubierto: {[c['topic'] for c in covered]}\nDébil: {weak}\n"
+            'Devuelve {"subtopics":[{"topic":"...","practical":true|false}]} con 3 elementos.')
+        if not data or not data.get("subtopics"):
+            return None
+        n = 0
+        for st in data["subtopics"][:3]:
+            if not isinstance(st, dict) or not st.get("topic"):
+                continue
+            topic = f"{st['topic']} [{self.domain[:20]}]"
+            memory.add_task("research", {"topic": topic, "area": self.domain}, self.name, priority=5)
+            if st.get("practical"):
+                memory.add_task("code", {"topic": topic}, self.name, priority=6)
+            n += 1
+        return f"{n} subtemas encolados" if n else None
+
+
+# 11 ----------------------------------------------------------------------
+class Trainer(Agent):
+    """Entrena velocidad y calidad programando: genera katas con tests reales, las resuelve contra reloj y mide."""
+    name = "trainer"
+    interval = config.CYCLE_SECONDS * 2
+
+    async def step(self):
+        import random
+        domain = random.choice(config.EXPERT_DOMAINS)
+        recent = memory.rows("SELECT AVG(passed) r FROM (SELECT passed FROM katas ORDER BY id DESC LIMIT 20)")[0]["r"]
+        difficulty = 3 if recent is None else min(5, max(1, round(1 + 4 * recent)))
+        kata = await llm.ask_json(
+            "Diseña un ejercicio de programación en Python (solo librería estándar) con tests unittest "
+            "que un experto resolvería en pocos minutos. Los tests deben importar `solution`.",
+            f"Dominio: {domain}. Dificultad 1-5: {difficulty}.\n"
+            'Devuelve {"title":"...","statement":"enunciado claro con firma de la función","tests":"código unittest completo que importa solution"}',
+            max_tokens=1500)
+        if not kata or not kata.get("tests") or not kata.get("statement"):
+            return None
+        kdir = config.KATAS_DIR / f"{int(time.time())}_{_slug(kata.get('title', 'kata'))}"
+        kdir.mkdir(parents=True, exist_ok=True)
+        (kdir / "test_solution.py").write_text(kata["tests"], encoding="utf-8")
+        (kdir / "STATEMENT.md").write_text(kata["statement"], encoding="utf-8")
+        t0, passed, feedback = time.time(), False, ""
+        for attempt in range(1, 4):
+            sol = await llm.ask("Eres un programador experto y rápido. Devuelve SOLO el código Python de solution.py, sin explicaciones ni markdown.",
+                                f"{kata['statement']}\n\nTests:\n{kata['tests']}\n{feedback}", temperature=0.2, max_tokens=1500)
+            sol = re.sub(r"^```(?:python)?\s*|\s*```$", "", sol.strip(), flags=re.S)
+            (kdir / "solution.py").write_text(sol, encoding="utf-8")
+            res = await tools.run_python_in(kdir, ["-m", "unittest", "-q", "test_solution"])
+            if res["ok"]:
+                passed = True
+                break
+            feedback = f"Fallo del intento {attempt}:\n{res['stderr'][-1500:]}\nCorrígelo."
+        secs = time.time() - t0
+        memory._q("INSERT INTO katas(domain,title,difficulty,passed,seconds,attempts,path,created) VALUES(?,?,?,?,?,?,?,?)",
+                  (domain, kata.get("title", ""), difficulty, int(passed), secs, attempt, str(kdir), time.time()))
+        if not passed:
+            memory.add_task("research", {"topic": f"{kata.get('title', '')} (kata fallida) [{domain[:20]}]", "area": domain},
+                            self.name, priority=3)
+        return f"kata {'OK' if passed else 'FALLIDA'} ({domain[:25]}, dif {difficulty}, {secs:.0f}s, {attempt} intento/s)"
+
+
+# 12 ----------------------------------------------------------------------
+class Skillsmith(Agent):
+    """Convierte lo aprendido en skills (formato Agent Skills) para tus agentes y los de Claude Code."""
+    name = "skillsmith"
+    interval = config.CYCLE_SECONDS * 6
+
+    async def step(self):
+        topics = memory.rows(
+            "SELECT topic, COUNT(*) n FROM knowledge WHERE verified=1 GROUP BY topic HAVING n>=4 ORDER BY MAX(updated) DESC LIMIT 20")
+        for t in topics:
+            slug = _slug(t["topic"])
+            path = config.SKILLS_DIR / slug / "SKILL.md"
+            newest = memory.rows("SELECT MAX(updated) u FROM knowledge WHERE topic=?", (t["topic"],))[0]["u"] or 0
+            if path.exists() and path.stat().st_mtime >= newest:
+                continue
+            facts = memory.rows("SELECT * FROM knowledge WHERE topic=? AND verified=1 ORDER BY confidence DESC LIMIT 25", (t["topic"],))
+            body = await llm.ask(
+                "Escribe un SKILL.md (Agent Skills): frontmatter YAML con `name` (slug dado) y `description` (cuándo usarlo, 1-2 frases), "
+                "luego instrucciones accionables, procedimientos paso a paso, errores comunes y ejemplos, SOLO a partir de los hechos dados. "
+                "Termina con sección 'Fuentes'.",
+                f"name: {slug}\nTema: {t['topic']}\nHechos:\n{_ctx(facts, 25)}\n"
+                f"Fuentes: {sorted({f['source'] for f in facts if f['source']})}", max_tokens=2200)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+            return f"skill escrita: {slug}"
+        return None
+
+
+# 13 ----------------------------------------------------------------------
+class Reviewer(Agent):
+    """Mejora a los propios agentes: revisa el código de stevecan/ y escribe propuestas con parche en data/proposals/."""
+    name = "reviewer"
+    interval = config.CYCLE_SECONDS * 12
+
+    async def step(self):
+        own = Path(__file__).resolve().parent
+        index_dir(own)
+        files = sorted(p for p in own.glob("*.py") if p.name != "__init__.py")
+        if not files:
+            return None
+        done = {p.stem for p in config.PROPOSALS_DIR.glob("*.md")}
+        pending = [p for p in files if p.stem not in done] or files
+        target = min(pending, key=lambda p: (config.PROPOSALS_DIR / f"{p.stem}.md").stat().st_mtime
+                     if (config.PROPOSALS_DIR / f"{p.stem}.md").exists() else 0)
+        src = target.read_text(encoding="utf-8")
+        stats = memory.stats()
+        review = await llm.ask(
+            "Eres un ingeniero senior revisando el código de un sistema multiagente. Propón mejoras concretas "
+            "(robustez, velocidad, calidad de aprendizaje) con un parche en formato diff unificado. Nada especulativo: "
+            "cada propuesta debe referirse a líneas reales del fichero.",
+            f"Métricas actuales del sistema: {json.dumps(stats, ensure_ascii=False, default=str)[:1500]}\n\n"
+            f"Fichero stevecan/{target.name}:\n```python\n{src[:14000]}\n```", max_tokens=2500)
+        out = config.PROPOSALS_DIR / f"{target.stem}.md"
+        out.write_text(f"# Propuesta de mejora: stevecan/{target.name}\n\n_{time.strftime('%Y-%m-%d %H:%M')}_\n\n{review}\n",
+                       encoding="utf-8")
+        return f"propuesta escrita: {out.name}"
+
+
+def build_agents():
+    base = [Curriculum(), Researcher(), Critic(), Coder(), Synthesizer(), Examiner(), Curator(), Orchestrator(),
+            Librarian(), Trainer(), Skillsmith(), Reviewer()]
+    return base + [Expert(d) for d in config.EXPERT_DOMAINS]
+
+
+ALL_AGENTS = [Curriculum, Researcher, Critic, Coder, Synthesizer, Examiner, Curator, Orchestrator, Librarian,
+              Trainer, Skillsmith, Reviewer]

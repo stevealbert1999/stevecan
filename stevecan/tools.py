@@ -111,3 +111,16 @@ async def run_python(code: str, timeout: int = 60) -> dict:
         proc.kill()
         return {"ok": False, "stdout": "", "stderr": f"timeout {timeout}s"}
     return {"ok": proc.returncode == 0, "stdout": out.decode()[-6000:], "stderr": err.decode()[-3000:]}
+
+
+async def run_python_in(cwd, args: list[str], timeout: int = 120) -> dict:
+    """Ejecuta `python <args>` dentro de un directorio (p. ej. tests unittest de una kata)."""
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-B", *args, cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return {"ok": False, "stdout": "", "stderr": f"timeout {timeout}s"}
+    return {"ok": proc.returncode == 0, "stdout": out.decode()[-6000:], "stderr": err.decode()[-3000:]}

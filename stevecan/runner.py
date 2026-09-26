@@ -4,7 +4,7 @@ import signal
 import time
 from logging.handlers import RotatingFileHandler
 from . import config, llm, memory
-from .roles import ALL_AGENTS
+from .roles import build_agents
 
 EXIT_OK = 0
 EXIT_MODEL_UNAVAILABLE = 3
@@ -41,7 +41,7 @@ async def main(minutes: float | None = None, wait_minutes: float | None = None) 
     requeued = memory.requeue_stale(0)
     if requeued:
         log.info("%d tareas 'running' de una ejecución anterior reencoladas", requeued)
-    agents = [cls() for cls in ALL_AGENTS]
+    agents = build_agents()
     log.info("lanzando %d agentes (límite: %s)", len(agents), f"{minutes:g} min" if minutes else "sin límite, 24/7")
     tasks = [asyncio.create_task(a.run_forever(), name=a.name) for a in agents]
     stop = asyncio.Event()
