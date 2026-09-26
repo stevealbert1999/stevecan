@@ -80,3 +80,19 @@ CODE_DIRS = list(dict.fromkeys(CODE_DIRS + PROJECT_DIRS))
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8765"))
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
+
+# Entrenamiento en CPU (modelo pequeño con LoRA; sirve de borrador especulativo para el 30B)
+DATASETS = [Path(p).expanduser().resolve() for p in os.getenv("DATASETS", "").split(":") if p.strip()]
+DATASETS_DIR = DATA_DIR / "datasets"
+MODELS_DIR = DATA_DIR / "models"
+TRAIN_BASE_MODEL = os.getenv("TRAIN_BASE_MODEL", "Qwen/Qwen3-0.6B")
+TRAIN_STEPS = int(os.getenv("TRAIN_STEPS", "300"))
+TRAIN_MAX_LEN = int(os.getenv("TRAIN_MAX_LEN", "1024"))
+TRAIN_LORA_R = int(os.getenv("TRAIN_LORA_R", "16"))
+TRAIN_THREADS = int(os.getenv("TRAIN_THREADS") or (os.cpu_count() or 4))
+TRAIN_MIN_EXAMPLES = int(os.getenv("TRAIN_MIN_EXAMPLES", "200"))
+AUTO_TRAIN = os.getenv("AUTO_TRAIN", "0") == "1"
+AUTO_TRAIN_EVERY_HOURS = float(os.getenv("AUTO_TRAIN_EVERY_HOURS", "24"))
+LLAMA_CPP_DIR = Path(os.getenv("LLAMA_CPP_DIR")).expanduser().resolve() if os.getenv("LLAMA_CPP_DIR") else None
+for d in (DATASETS_DIR, MODELS_DIR):
+    d.mkdir(parents=True, exist_ok=True)

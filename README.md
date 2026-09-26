@@ -1,4 +1,4 @@
-# stevecan — 37 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
+# stevecan — 38 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
 
 Todos los agentes comparten un único `llama-server` con 8 slots paralelos y batching continuo:
 sin límites de peticiones ni de tokens más allá de tu hardware.
@@ -18,6 +18,7 @@ sin límites de peticiones ni de tokens más allá de tu hardware.
 | skillsmith | convierte lo aprendido en skills `SKILL.md` (`data/skills/`) para tus agentes y Claude Code |
 | reviewer | revisa el código de los propios agentes y deja propuestas con parche en `data/proposals/` |
 | developer | mejora **tus proyectos** (`PROJECT_DIRS`, p. ej. Astur OS y Astur APK) por orden tuya o por iniciativa propia, siempre con backup verificado y tests |
+| tuner | entrena pesos en CPU (LoRA sobre un modelo pequeño) con el dataset real del sistema, cada `AUTO_TRAIN_EVERY_HOURS` |
 | expert × 24 | un experto por dominio (`EXPERT_DOMAINS`): Linux, macOS, Windows, Python, JS/TS, C/C++, Java/JVM, C#/.NET, Go, Rust, PHP/Ruby/Perl, Swift/Kotlin, SQL, shell, paradigmas, algoritmos, arquitectura, testing, web, DevOps, bases de datos, redes sociales, Android/APK, sistemas operativos |
 
 ## Requisitos
@@ -85,6 +86,20 @@ en la memoria como `docs:<nombre>`; `librarian` las actualiza a diario. Todos lo
 python -m stevecan.docs sync     # primera descarga (varios GB en el caso de MDN/JDK sparse: minutos)
 python -m stevecan.docs stats
 ```
+
+## Entrenar pesos en CPU y hacerlo rápido
+Entrenar el 30B en CPU no es viable (semanas por época). Lo que sí funciona y está montado:
+1. **Dataset real** (`python -m stevecan.dataset build`): solo material producido y verificado por el sistema (exámenes acertados sobre
+   hechos verificados, katas que pasaron tests, mejoras aprobadas, notas) más tus datasets en `DATASETS` (jsonl/json/csv/txt/md).
+2. **LoRA en CPU** sobre un modelo pequeño (`TRAIN_BASE_MODEL`, por defecto Qwen3-0.6B) y conversión a GGUF:
+   ```bash
+   pip install -r requirements-train.txt
+   LLAMA_CPP_DIR=/ruta/llama.cpp python -m stevecan.train check
+   python -m stevecan.train run --steps 300      # o AUTO_TRAIN=1 para que el agente tuner lo haga solo
+   ```
+3. **Velocidad tipo Claude Code**: el GGUF pequeño resultante (o Qwen3-0.6B) se usa como **modelo borrador** en `llama-server`
+   (`DRAFT_GGUF=` en `.env`): decodificación especulativa, 1.5-3x más tokens/s con la misma calidad del 30B, más `--cache-reuse`
+   para no reprocesar prompts repetidos. `THREADS` fija los hilos de CPU.
 
 ## Mejorar a tus agentes con lo aprendido
 - `data/skills/<tema>/SKILL.md`: skills generados por `skillsmith`. Cópialos a `.claude/skills/` (o al directorio de skills de tu agente) y quedan disponibles.

@@ -512,11 +512,33 @@ class Developer(Agent):
         return f"{project.name}: {'OK' if r['ok'] else 'descartada'} -> {instr[:70]}"
 
 
+# 15 ----------------------------------------------------------------------
+class Tuner(Agent):
+    """Entrena pesos en CPU (LoRA sobre un modelo pequeño) con el dataset real del sistema, en un subproceso
+    de baja prioridad, cada AUTO_TRAIN_EVERY_HOURS. Requiere AUTO_TRAIN=1 y requirements-train.txt."""
+    name = "tuner"
+    interval = config.CYCLE_SECONDS * 30
+    _last = 0.0
+
+    async def step(self):
+        if not config.AUTO_TRAIN or time.time() - Tuner._last < config.AUTO_TRAIN_EVERY_HOURS * 3600:
+            return None
+        Tuner._last = time.time()
+        import sys
+        proc = await asyncio.create_subprocess_exec(
+            "nice", "-n", "15", sys.executable, "-m", "stevecan.train", "run",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await proc.communicate()
+        tail = out.decode(errors="ignore")[-1500:]
+        memory.log_event(self.name, "train", tail)
+        return f"entrenamiento {'OK' if proc.returncode == 0 else 'FALLIDO'}: {tail.splitlines()[-1] if tail else ''}"
+
+
 def build_agents():
     base = [Curriculum(), Researcher(), Critic(), Coder(), Synthesizer(), Examiner(), Curator(), Orchestrator(),
-            Librarian(), Trainer(), Skillsmith(), Reviewer(), Developer()]
+            Librarian(), Trainer(), Skillsmith(), Reviewer(), Developer(), Tuner()]
     return base + [Expert(d) for d in config.EXPERT_DOMAINS]
 
 
 ALL_AGENTS = [Curriculum, Researcher, Critic, Coder, Synthesizer, Examiner, Curator, Orchestrator, Librarian,
-              Trainer, Skillsmith, Reviewer, Developer]
+              Trainer, Skillsmith, Reviewer, Developer, Tuner]
