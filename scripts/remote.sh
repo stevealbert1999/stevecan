@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Controla el sistema en tu servidor privado.
-#   scripts/remote.sh usuario@servidor status|logs|restart|stop|start|ask "pregunta"|improve /ruta "instrucción"|backups [/ruta]
+#   scripts/remote.sh usuario@servidor status|logs|restart|stop|start|smoke|panel|ask "pregunta"|improve /ruta "instrucción"|backups [/ruta]
 set -euo pipefail
 HOST="${1:?uso: $0 usuario@servidor comando}"; CMD="${2:?comando}"; shift 2
 DEST="${DEST:-stevecan}"
@@ -13,5 +13,7 @@ case "$CMD" in
   ask)     ssh "$HOST" "cd $DEST && .venv/bin/python -m stevecan.ask $(printf '%q ' "$@")" ;;
   improve) ssh "$HOST" "cd $DEST && .venv/bin/python -m stevecan.developer $(printf '%q ' "$@")" ;;
   backups) ssh "$HOST" "cd $DEST && .venv/bin/python -m stevecan.projects list $(printf '%q ' "$@")" ;;
+  smoke)   ssh -t "$HOST" "cd $DEST && SMOKE_MINUTES=${SMOKE_MINUTES:-60} ./scripts/smoke.sh" ;;
+  panel)   echo "http://${HOST#*@}:8765/  (abre un túnel: ssh -L 8765:localhost:8765 $HOST)" ;;
   *) echo "comando desconocido: $CMD" >&2; exit 2 ;;
 esac

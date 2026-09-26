@@ -181,6 +181,8 @@ if __name__ == "__main__":
     if len(args) < 2:
         sys.exit(__doc__)
     path, instr = Path(args[0]), " ".join(args[1:])
+    if not asyncio.run(llm.healthy()):
+        sys.exit(f"el modelo no responde en {config.LLM_BASE_URL}: arranca llama-server (scripts/llama-server.sh) o revisa LLM_BASE_URL")
     if "--now" in sys.argv:
         r = asyncio.run(improve(path, instr, agent="cli"))
         print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
