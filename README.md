@@ -65,7 +65,7 @@ cloudflared tunnel --url http://localhost:8080   # o ngrok http 8080
 ```
 Secreto de repo `LLM_BASE_URL=https://<tu-tunel>/v1`, variable `AGENTS_RUNNER=github`. Cada job levanta su propio SearXNG.
 
-Nota: `schedule` y el botón *Run workflow* solo aparecen cuando el workflow está en la rama por defecto (`main`).
+Nota: `schedule` y el botón *Run workflow* solo aparecen cuando el workflow está en la rama por defecto (`master`).
 
 ## Skills de Claude Code incluidos
 `.claude/skills/` trae vendorizados **superpowers** (obra/superpowers), **agent-skill** (anthropics/skills, solo los Apache 2.0)
