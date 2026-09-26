@@ -1,4 +1,4 @@
-# stevecan — 33 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
+# stevecan — 32 agentes de aprendizaje 24/7 sobre Qwen3-30B-A3B local
 
 Todos los agentes comparten un único `llama-server` con 8 slots paralelos y batching continuo:
 sin límites de peticiones ni de tokens más allá de tu hardware.
@@ -17,7 +17,7 @@ sin límites de peticiones ni de tokens más allá de tu hardware.
 | trainer | katas de programación con tests reales contra reloj: mide velocidad y tasa de acierto |
 | skillsmith | convierte lo aprendido en skills `SKILL.md` (`data/skills/`) para tus agentes y Claude Code |
 | reviewer | revisa el código de los propios agentes y deja propuestas con parche en `data/proposals/` |
-| expert × 21 | un experto por dominio (`EXPERT_DOMAINS`): Linux, macOS, Windows, Python, JS/TS, C/C++, Java/JVM, C#/.NET, Go, Rust, PHP/Ruby/Perl, Swift/Kotlin, SQL, shell, paradigmas, algoritmos, arquitectura, testing, web, DevOps |
+| expert × 20 | un experto por dominio (`EXPERT_DOMAINS`): Linux, macOS, Windows, Python, JS/TS, C/C++, Java/JVM, C#/.NET, Go, Rust, PHP/Ruby/Perl, Swift/Kotlin, SQL, shell, paradigmas, algoritmos, arquitectura, testing, web, DevOps |
 
 ## Requisitos
 - `llama-server` (llama.cpp) en el PATH, o Docker con GPU NVIDIA.
